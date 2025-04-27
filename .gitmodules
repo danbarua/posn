@@ -1,0 +1,6 @@
+[submodule "matlab/budzinskiEAexact"]
+	path = matlab/budzinskiEAexact
+	url = https://github.com/mullerlab/budzinskiEAexact
+[submodule "matlab/liboniEA2025image"]
+	path = matlab/liboniEA2025image
+	url = https://github.com/mullerlab/liboniEA2025image
