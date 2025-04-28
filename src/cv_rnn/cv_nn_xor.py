@@ -1,10 +1,9 @@
-import matplotlib.pyplot as plt
 import math
 from typing import Dict, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-
 
 """
 xor_cv_nn.py
@@ -329,10 +328,8 @@ class XorCVNN:
         return out
 
     def plot_thickens(
-        self, title: str, x: torch.Tensor, readout_time: int = 150
+        self, title: str, x: torch.Tensor, readout_time: int = -1
     ) -> None:
-        import matplotlib.pyplot as plt
-
         # Determine the number of timesteps from the tensor shape
         nt = x.shape[1]
         # Create a time vector from 0 to nt steps
@@ -357,9 +354,9 @@ class XorCVNN:
 
         # ---- Figure 2: Final state cv-NN ----
         plt.figure(figsize=(4.05, 1.84))
-        plt.title(f"Final state ({title})", fontsize=16, fontname="Arial")
+        plt.title(f"State {title} at ({readout_time})", fontsize=16, fontname="Arial")
         # Extract final state across all nodes (column axis)
-        final_phase = np.angle(x[:, -1])
+        final_phase = np.angle(x[:, readout_time])
         nodes = np.arange(1, self.N + 1)  # nodes from 1 to N
         plt.scatter(
             nodes, final_phase, c="black", marker="o", s=40

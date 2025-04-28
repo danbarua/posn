@@ -18,7 +18,7 @@ import torch
 from sklearn.metrics import adjusted_rand_score
 
 # ---- module under test -------------------------------------------------
-from cv_rnn.cv_rnn_segmentation import (
+from src.cv_rnn import (
     run_2layer_torch,
     spatiotemporal_segmentation_torch,
 )

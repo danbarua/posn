@@ -27,12 +27,6 @@ import numpy as np
 import torch
 from sklearn.cluster import KMeans
 
-__all__ = [
-    "gaussian_sheet_torch",
-    "run_2layer_torch",
-    "spatiotemporal_segmentation_torch",
-]
-
 
 # --------------------------------------------------------------------------- #
 # 1.  Gaussian connectivity sheet                                             #
@@ -316,7 +310,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-dir",
         type=Path,
-        default=Path("../datasets"),
+        default=Path("../../datasets"),
         help="where to download 2shapes.mat",
     )
     args = parser.parse_args()
