@@ -15,6 +15,7 @@ dependencies:
   - torchvision=0.*
   - lightning=2.*
   - torchmetrics=0.*
+  - tensorboard=2.19.*
   - hydra-core=1.*
   - matplotlib=3.*
   - plotly=6.*

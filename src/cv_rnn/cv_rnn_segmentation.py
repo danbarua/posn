@@ -21,11 +21,14 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Iterable, Literal, Tuple, Union
+from typing import Iterable, Tuple, Union
 
 import numpy as np
 import torch
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans  # type: ignore
+
+from defns import DATA_DIR
+from src.cv_rnn.cv_nn_plot_phase_dynamics import plot_dynamics
 
 
 # --------------------------------------------------------------------------- #
@@ -90,12 +93,33 @@ def gaussian_sheet_torch(
 # --------------------------------------------------------------------------- #
 # 2.  Two-layer cv-RNN dynamics                                               #
 # --------------------------------------------------------------------------- #
-def _step(matrix: torch.Tensor, omega: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+def _step(
+    matrix: torch.Tensor, omega: torch.Tensor, x: torch.Tensor, eps: float = 1e-12
+) -> torch.Tensor:
     """
-    One Euler step of     x ← (K + i·diag(ω))·x
-    implemented without forming the dense diagonal matrix.
+    One Euler step      x ← (K + i·diag(ω)) · x,
+    implemented without forming the dense diagonal matrix, **and**
+    projected back onto the unit circle so that |x| ≈ 1.
+
+    Parameters
+    ----------
+    matrix : (..., N, N)      coupling matrix  K
+    omega  : (..., N)         natural frequencies ω
+    x      : (..., N, 1)      current complex state
+    eps    : float            small value to avoid division by zero
+
+    Returns
+    -------
+    torch.Tensor              updated, re-normalised complex state
     """
-    return matrix @ x + 1j * omega.unsqueeze(1) * x
+    # Euler RHS
+    x_new = matrix @ x + 1j * omega.unsqueeze(-1) * x
+
+    # Project back to |x| = 1
+    magn = x_new.abs().clamp(min=eps)  # real-valued
+    x_new = x_new / magn
+
+    return x_new
 
 
 def run_2layer_torch(
@@ -137,8 +161,11 @@ def run_2layer_torch(
     # initial condition                                                  #
     # ------------------------------------------------------------------ #
     rand = torch.rand((n, 1), device=device, generator=generator, dtype=dtype)
-    x0 = torch.exp(1j * (rand * 2 * math.pi))  # phase ∈ [0,2π)
+    # x0 = torch.exp(1j * (rand * 2 * math.pi))  # phase ∈ [0,2π)
+    x0 = torch.exp(1j * (rand - 0.5) * 2 * math.pi)  # phase ∈ [-π, π)
     x = x0.clone()
+
+    print_complex_tensor_stats("x0", x0)
 
     omega = im.flatten()  # (N,)
 
@@ -152,18 +179,25 @@ def run_2layer_torch(
         nrow, ncol, alpha[0], sigma[0], device=device, dtype=dtype
     )
 
+    print_complex_tensor_stats("k1", k1)
+
     for t in range(1, t1):
         x = _step(k1, omega, x)
+        print_complex_tensor_stats(f"x @ t={t}", x)
         save_x[:, t] = x.squeeze()
 
     # mask = majority side of mean phase
     phase_t1 = torch.angle(x.squeeze())
+    print(f"phase_t1: {phase_t1.shape}, {phase_t1.min()}, {phase_t1.max()}")
+
     thr = phase_t1.mean()
+    print(f"Mean phase: {thr}")
     mask = (
         phase_t1 > thr
         if (phase_t1 > thr).sum() > (phase_t1 < thr).sum()
         else phase_t1 < thr
     )
+
     mask_idx = mask.nonzero(as_tuple=False).squeeze()
 
     # ------------------------------------------------------------------ #
@@ -175,6 +209,7 @@ def run_2layer_torch(
     k2[mask, :] = 0
     k2[:, mask] = 0
 
+    print_complex_tensor_stats("k2", k2)
     omega2 = omega.clone()
     omega2[mask] = 0
 
@@ -182,12 +217,21 @@ def run_2layer_torch(
     x = x0.clone()
     x[mask] = 0
 
+    print_complex_tensor_stats("x @ t1", x)
+
     for t in range(t1, t_end):
         x = _step(k2, omega2, x)
         save_x[:, t] = x.squeeze()
 
-    save_x[mask, t1:t_end] = torch.nan
+    print(f"Any Nans in save_x (before masking): {torch.isnan(save_x).any().item()}")
+    save_x[mask, t1:t_end] = torch.nan  # Note: Explicit NaN setting
     return save_x, mask
+
+
+def print_complex_tensor_stats(name: str, input: torch.Tensor):
+    print(
+        f"{name} real: [{input.real.min()}, {input.real.max()}] imag: [{input.imag.min()}, {input.imag.max()}] mean: {input.mean()}, std: {input.std()}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -253,17 +297,25 @@ def spatiotemporal_segmentation_torch(
     win_starts = torch.arange(nt_mask, t_end - window_size + 1, window_step)
     n_wins = len(win_starts)
 
-    rho = torch.empty((n, n, n_wins), dtype=torch.complex64, device=device)
-    V = torch.empty_like(rho)
-    D = torch.empty_like(rho)
-    prj = torch.empty((n, len(tuple(dim)), n_wins), dtype=torch.float32, device=device)
+    rho = torch.empty(
+        (n, n, n_wins), dtype=torch.complex64, device=device
+    )  # rho: similarity matrix (nodes x nodes x time window)
+    V = torch.empty_like(rho)  #  V: eigenvectors of rho
+    D = torch.empty_like(rho)  #  D: eigenvalues of rho
+    prj = torch.empty(
+        (n, len(tuple(dim)), n_wins), dtype=torch.float32, device=device
+    )  # prj: rho*V
 
     for k, ws in enumerate(win_starts):
         we = ws + window_size
         rho_k = _similarity_tensor(save_x, ws, we)
+        print("Any NaNs in rho_k:", torch.isnan(rho_k).any().item())
+        print("Any infs in rho_k:", torch.isinf(rho_k).any().item())
         rho[:, :, k] = rho_k
 
         # eig(ρ) — real symmetric in practice after taking Re, but follow MATLAB
+        # rho_k is (N, N) complex and may contain NaNs coming from the mask
+        rho_k = torch.nan_to_num(rho_k, nan=0.0)
         vals, vecs = torch.linalg.eig(rho_k)
         order = vals.abs().argsort(descending=True)
         vals, vecs = vals[order], vecs[:, order]
@@ -303,14 +355,14 @@ def spatiotemporal_segmentation_torch(
 if __name__ == "__main__":
     import argparse
     import matplotlib.pyplot as plt
-    from torchvision.datasets.utils import download_url
+    from torchvision.datasets.utils import download_url  # type:ignore
 
     parser = argparse.ArgumentParser(description="cv-RNN demo on 2-Shapes")
     parser.add_argument("--gpu", action="store_true", help="run on CUDA if available")
     parser.add_argument(
         "--dataset-dir",
         type=Path,
-        default=Path("../../datasets"),
+        default=Path(DATA_DIR),
         help="where to download 2shapes.mat",
     )
     args = parser.parse_args()
@@ -331,6 +383,14 @@ if __name__ == "__main__":
     data = loadmat(mat_path)
     image = torch.from_numpy(data["images"][:, :, 0]).float()  # pick first example
 
+    print("Any NaNs in image:", torch.isnan(image).any().item())
+    print("Any infs in image:", torch.isinf(image).any().item())
+
+    # normalize image from [-1, 1] to [-pi, pi]
+    image = image * math.pi
+    print(f"Image shape: {image.shape}, Total: {image.numel()}")
+    print(f"Image min: {image.min()}, max: {image.max()}")
+
     # ------------------------------------------------------------------ #
     # run model                                                          #
     # ------------------------------------------------------------------ #
@@ -339,6 +399,19 @@ if __name__ == "__main__":
         generator=g,
         device=dev,
     )
+
+    print(f"Mask shape: {mask.shape}, Mask sum: {mask.sum()}, Total: {mask.numel()}")
+    print("Any masked?", (mask.sum() > 0))
+    if mask.sum() == mask.numel() or mask.sum() == 0:
+        print(
+            "Warning: All or zero nodes masked! Check phase distribution or threshold logic."
+        )
+    print(torch.isnan(save_x).sum())  # See when NaNs appear
+    print("Any NaNs in save_x:", torch.isnan(save_x).any().item())
+    print("Any infs in save_x:", torch.isinf(save_x).any().item())
+    print("Any NaNs in mask:", torch.isnan(mask).any().item())
+    print("Any infs in mask:", torch.isinf(mask).any().item())
+
     cluster_map, rho, V, D, prj = spatiotemporal_segmentation_torch(
         save_x,
         image,
@@ -347,7 +420,7 @@ if __name__ == "__main__":
         dim=(0, 1, 2),
         window_size=40,
         window_step=40,
-        nt_mask=60,
+        nt_mask=61,
         device=dev,
     )
 
@@ -366,3 +439,6 @@ if __name__ == "__main__":
     fig.colorbar(im_, ax=ax.ravel().tolist(), shrink=0.6)
     plt.tight_layout()
     plt.show()
+
+    # MATPLOTLIB ported visualisation
+    plot_dynamics(save_x.detach().cpu().numpy(), image, 60)
