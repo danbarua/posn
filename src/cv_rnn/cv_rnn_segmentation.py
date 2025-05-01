@@ -25,10 +25,15 @@ from typing import Iterable, Tuple, Union
 
 import numpy as np
 import torch
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import hsv_to_rgb
 from sklearn.cluster import KMeans  # type: ignore
 
 from defns import DATA_DIR
-from src.cv_rnn.cv_nn_plot_phase_dynamics import plot_dynamics
+from src.cv_rnn.cv_nn_plot_phase_dynamics import plot_dynamics, plot_dynamics_animated
+from src.cv_rnn.cv_rnn_plot_spectral_clustering import plot_spectral_clustering
+import matplotlib.animation as animation
 
 
 # --------------------------------------------------------------------------- #
@@ -94,7 +99,11 @@ def gaussian_sheet_torch(
 # 2.  Two-layer cv-RNN dynamics                                               #
 # --------------------------------------------------------------------------- #
 def _step(
-    matrix: torch.Tensor, omega: torch.Tensor, x: torch.Tensor, eps: float = 1e-12
+    matrix: torch.Tensor,
+    omega: torch.Tensor,
+    x: torch.Tensor,
+    dt: float = 1.0,
+    eps: float = 1e-12,
 ) -> torch.Tensor:
     """
     One Euler step      x ← (K + i·diag(ω)) · x,
@@ -106,20 +115,22 @@ def _step(
     matrix : (..., N, N)      coupling matrix  K
     omega  : (..., N)         natural frequencies ω
     x      : (..., N, 1)      current complex state
+    dt     : float            time step, default 1.0
     eps    : float            small value to avoid division by zero
 
     Returns
     -------
     torch.Tensor              updated, re-normalised complex state
     """
-    # Euler RHS
-    x_new = matrix @ x + 1j * omega.unsqueeze(-1) * x
 
-    # Project back to |x| = 1
-    magn = x_new.abs().clamp(min=eps)  # real-valued
-    x_new = x_new / magn
-
-    return x_new
+    """
+    Explicit‐Euler step on Liboni et al. eq. (2)
+        ẋ = (K + iω) x
+    followed by renormalisation so that |x_i| = 1 (as in the MATLAB code).
+    """
+    z = matrix @ x + 1j * omega.unsqueeze(1) * x  # RHS
+    x = x + dt * z  # Euler Δt
+    return x / x.abs().clamp(min=eps)  # stay on unit circle
 
 
 def run_2layer_torch(
@@ -165,9 +176,8 @@ def run_2layer_torch(
     x0 = torch.exp(1j * (rand - 0.5) * 2 * math.pi)  # phase ∈ [-π, π)
     x = x0.clone()
 
-    print_complex_tensor_stats("x0", x0)
-
-    omega = im.flatten()  # (N,)
+    # keep ω in complex64, avoid silent promotion
+    omega = im.flatten().to(torch.complex64)  # (N,)
 
     save_x = torch.empty((n, t_end), dtype=torch.complex64, device=device)
     save_x[:, 0] = x0.squeeze()
@@ -178,20 +188,13 @@ def run_2layer_torch(
     k1 = gaussian_sheet_torch(
         nrow, ncol, alpha[0], sigma[0], device=device, dtype=dtype
     )
-
-    print_complex_tensor_stats("k1", k1)
-
     for t in range(1, t1):
         x = _step(k1, omega, x)
-        print_complex_tensor_stats(f"x @ t={t}", x)
         save_x[:, t] = x.squeeze()
 
     # mask = majority side of mean phase
     phase_t1 = torch.angle(x.squeeze())
-    print(f"phase_t1: {phase_t1.shape}, {phase_t1.min()}, {phase_t1.max()}")
-
     thr = phase_t1.mean()
-    print(f"Mean phase: {thr}")
     mask = (
         phase_t1 > thr
         if (phase_t1 > thr).sum() > (phase_t1 < thr).sum()
@@ -217,13 +220,10 @@ def run_2layer_torch(
     x = x0.clone()
     x[mask] = 0
 
-    print_complex_tensor_stats("x @ t1", x)
-
     for t in range(t1, t_end):
         x = _step(k2, omega2, x)
         save_x[:, t] = x.squeeze()
 
-    print(f"Any Nans in save_x (before masking): {torch.isnan(save_x).any().item()}")
     save_x[mask, t1:t_end] = torch.nan  # Note: Explicit NaN setting
     return save_x, mask
 
@@ -309,13 +309,12 @@ def spatiotemporal_segmentation_torch(
     for k, ws in enumerate(win_starts):
         we = ws + window_size
         rho_k = _similarity_tensor(save_x, ws, we)
-        print("Any NaNs in rho_k:", torch.isnan(rho_k).any().item())
-        print("Any infs in rho_k:", torch.isinf(rho_k).any().item())
         rho[:, :, k] = rho_k
 
-        # eig(ρ) — real symmetric in practice after taking Re, but follow MATLAB
         # rho_k is (N, N) complex and may contain NaNs coming from the mask
         rho_k = torch.nan_to_num(rho_k, nan=0.0)
+
+        # eig(ρ) — real symmetric in practice after taking Re, but follow MATLAB
         vals, vecs = torch.linalg.eig(rho_k)
         order = vals.abs().argsort(descending=True)
         vals, vecs = vals[order], vecs[:, order]
@@ -347,6 +346,115 @@ def spatiotemporal_segmentation_torch(
         D,
         prj,
     )
+
+
+def run_and_plot_image(image: torch.Tensor, g: torch.Generator, dev: torch.device):
+    # ------------------------------------------------------------------ #
+    # run model                                                          #
+    # ------------------------------------------------------------------ #
+    save_x, mask = run_2layer_torch(
+        image,
+        generator=g,
+        device=dev,
+    )
+    print(f"Mask shape: {mask.shape}, Mask sum: {mask.sum()}, Total: {mask.numel()}")
+    print("Any masked?", (mask.sum() > 0))
+    if mask.sum() == mask.numel() or mask.sum() == 0:
+        print(
+            "Warning: All or zero nodes masked! Check phase distribution or threshold logic."
+        )
+    cluster_map, rho, V, D, prj = spatiotemporal_segmentation_torch(
+        save_x,
+        image,
+        mask,
+        n_clusters=2,
+        dim=(0, 1, 2),
+        window_size=40,
+        window_step=40,
+        nt_mask=61,
+        device=dev,
+    )
+    # ------------------------------------------------------------------ #
+    # quick visualisation                                                #
+    # ------------------------------------------------------------------ #
+    fig, ax = plt.subplots(1, 3, figsize=(9, 3))
+    # Specify vmin and vmax to avoid clipping warnings.
+    ax[0].imshow(image.cpu(), cmap="gray", vmin=-math.pi, vmax=math.pi)
+    ax[0].set_title("input")
+    ax[1].imshow(mask.view(*image.shape).cpu(), cmap="gray")
+    ax[1].set_title("mask")
+    im_ = ax[2].imshow(cluster_map.cpu(), cmap="tab10", vmin=-1, vmax=1)
+    ax[2].set_title("segments")
+    for a in ax:
+        a.axis("off")
+    fig.colorbar(im_, ax=ax.ravel().tolist(), shrink=0.6)
+    plt.show()
+
+    plot_spectral_clustering(prj.cpu().numpy(), save_x.cpu().numpy(), 60)
+    plt.show()
+
+    ani = visualize_dynamics(save_x.detach().cpu(), image, mask, 200, 200)
+    plt.show()
+
+
+def visualize_dynamics(save_x, image, mask=None, n_frames=20, interval=200, nt1=60):
+    """
+    Create animation of phase dynamics.
+
+    Args:
+        save_x: Network dynamics from run_two_layer
+        image: Original input image
+        mask: Optional foreground-background mask
+        n_frames: Number of frames to show
+        interval: Time between frames (ms)
+
+    Returns:
+        Animation object
+    """
+    N_rows, N_cols = image.shape
+    nt = save_x.shape[1]
+
+    frame_indices = np.linspace(0, nt - 1, n_frames, dtype=int)
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    phase_map = torch.angle(save_x[:, frame_indices[0]])
+    phase_map = phase_map.reshape(N_rows, N_cols)
+
+    hsv = torch.zeros((N_rows, N_cols, 3), device="cpu")
+    hsv[:, :, 0] = (phase_map + math.pi) / (2 * math.pi)
+    hsv[:, :, 1] = 1.0
+    hsv[:, :, 2] = 1.0
+
+    if mask is not None:
+        mask_2d = mask.reshape(N_rows, N_cols)
+        hsv[..., 2][mask_2d] = 0.0
+
+    # Explicitly set vmin=0, vmax=1 for the RGB image.
+    rgb = hsv_to_rgb(hsv.cpu().numpy())
+    im = ax.imshow(rgb, animated=True, vmin=0, vmax=1)
+
+    title = ax.set_title(f"t = {frame_indices[0]}")
+    ax.axis("off")
+
+    def update(frame_idx):
+        phase_map = torch.angle(save_x[:, frame_idx])
+        phase_map = phase_map.reshape(N_rows, N_cols)
+        hsv = torch.zeros((N_rows, N_cols, 3), device="cpu")
+        hsv[:, :, 0] = (phase_map.cpu() + math.pi) / (2 * math.pi)
+        hsv[:, :, 1] = 1.0
+        hsv[:, :, 2] = 1.0
+        if mask is not None:  # and frame_idx >= nt1:
+            mask_2d = mask.reshape(N_rows, N_cols)
+            hsv[..., 2][mask_2d.cpu()] = 0.0
+        rgb = hsv_to_rgb(hsv.numpy())
+        im.set_array(rgb)
+        title.set_text(f"t = {frame_idx}")
+        return [im, title]
+
+    ani = animation.FuncAnimation(
+        fig, update, frames=frame_indices, interval=interval, blit=True
+    )
+    return ani
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +489,11 @@ if __name__ == "__main__":
     if not mat_path.exists():
         download_url(url, str(mat_path.parent))
     data = loadmat(mat_path)
-    image = torch.from_numpy(data["images"][:, :, 0]).float()  # pick first example
+
+    # iterate through images in data["images"]
+    # images is (32, 32, 3)
+    i = 0  # select 0,1, or 2
+    image = torch.from_numpy(data["images"][:, :, i]).float()  # pick first example
 
     print("Any NaNs in image:", torch.isnan(image).any().item())
     print("Any infs in image:", torch.isinf(image).any().item())
@@ -391,54 +503,4 @@ if __name__ == "__main__":
     print(f"Image shape: {image.shape}, Total: {image.numel()}")
     print(f"Image min: {image.min()}, max: {image.max()}")
 
-    # ------------------------------------------------------------------ #
-    # run model                                                          #
-    # ------------------------------------------------------------------ #
-    save_x, mask = run_2layer_torch(
-        image,
-        generator=g,
-        device=dev,
-    )
-
-    print(f"Mask shape: {mask.shape}, Mask sum: {mask.sum()}, Total: {mask.numel()}")
-    print("Any masked?", (mask.sum() > 0))
-    if mask.sum() == mask.numel() or mask.sum() == 0:
-        print(
-            "Warning: All or zero nodes masked! Check phase distribution or threshold logic."
-        )
-    print(torch.isnan(save_x).sum())  # See when NaNs appear
-    print("Any NaNs in save_x:", torch.isnan(save_x).any().item())
-    print("Any infs in save_x:", torch.isinf(save_x).any().item())
-    print("Any NaNs in mask:", torch.isnan(mask).any().item())
-    print("Any infs in mask:", torch.isinf(mask).any().item())
-
-    cluster_map, rho, V, D, prj = spatiotemporal_segmentation_torch(
-        save_x,
-        image,
-        mask,
-        n_clusters=2,
-        dim=(0, 1, 2),
-        window_size=40,
-        window_step=40,
-        nt_mask=61,
-        device=dev,
-    )
-
-    # ------------------------------------------------------------------ #
-    # quick visualisation                                                #
-    # ------------------------------------------------------------------ #
-    fig, ax = plt.subplots(1, 3, figsize=(9, 3))
-    ax[0].imshow(image.cpu(), cmap="gray")
-    ax[0].set_title("input")
-    ax[1].imshow(mask.view(*image.shape).cpu(), cmap="gray")
-    ax[1].set_title("mask")
-    im_ = ax[2].imshow(cluster_map.cpu(), cmap="tab10", vmin=-1, vmax=1)
-    ax[2].set_title("segments")
-    for a in ax:
-        a.axis("off")
-    fig.colorbar(im_, ax=ax.ravel().tolist(), shrink=0.6)
-    plt.tight_layout()
-    plt.show()
-
-    # MATPLOTLIB ported visualisation
-    plot_dynamics(save_x.detach().cpu().numpy(), image, 60)
+    run_and_plot_image(image, g, dev)
