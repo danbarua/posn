@@ -397,7 +397,7 @@ def run_and_plot_image(image: torch.Tensor, g: torch.Generator, dev: torch.devic
     plt.show()
 
 
-def visualize_dynamics(save_x, image, mask=None, n_frames=20, interval=200, nt1=60):
+def visualize_dynamics(save_x, image, mask=None, n_frames=20, interval=200):
     """
     Create animation of phase dynamics.
 
@@ -414,38 +414,43 @@ def visualize_dynamics(save_x, image, mask=None, n_frames=20, interval=200, nt1=
     N_rows, N_cols = image.shape
     nt = save_x.shape[1]
 
+    # Select frames to display
     frame_indices = np.linspace(0, nt - 1, n_frames, dtype=int)
     fig, ax = plt.subplots(figsize=(8, 8))
 
+    # Compute and sanitize the phase map from the first frame
     phase_map = torch.angle(save_x[:, frame_indices[0]])
     phase_map = phase_map.reshape(N_rows, N_cols)
+    phase_map = torch.nan_to_num(phase_map, nan=0.0)
 
     hsv = torch.zeros((N_rows, N_cols, 3), device="cpu")
     hsv[:, :, 0] = (phase_map + math.pi) / (2 * math.pi)
-    hsv[:, :, 1] = 1.0
-    hsv[:, :, 2] = 1.0
+    hsv[:, :, 1] = 1.0  # full saturation
+    hsv[:, :, 2] = 1.0  # full value
 
     if mask is not None:
         mask_2d = mask.reshape(N_rows, N_cols)
         hsv[..., 2][mask_2d] = 0.0
 
-    # Explicitly set vmin=0, vmax=1 for the RGB image.
     rgb = hsv_to_rgb(hsv.cpu().numpy())
     im = ax.imshow(rgb, animated=True, vmin=0, vmax=1)
-
     title = ax.set_title(f"t = {frame_indices[0]}")
     ax.axis("off")
 
     def update(frame_idx):
         phase_map = torch.angle(save_x[:, frame_idx])
         phase_map = phase_map.reshape(N_rows, N_cols)
+        phase_map = torch.nan_to_num(phase_map, nan=0.0)
+
         hsv = torch.zeros((N_rows, N_cols, 3), device="cpu")
         hsv[:, :, 0] = (phase_map.cpu() + math.pi) / (2 * math.pi)
         hsv[:, :, 1] = 1.0
         hsv[:, :, 2] = 1.0
-        if mask is not None:  # and frame_idx >= nt1:
+
+        if mask is not None:
             mask_2d = mask.reshape(N_rows, N_cols)
             hsv[..., 2][mask_2d.cpu()] = 0.0
+
         rgb = hsv_to_rgb(hsv.numpy())
         im.set_array(rgb)
         title.set_text(f"t = {frame_idx}")
