@@ -44,6 +44,8 @@ pip install -r requirements.txt
 
 ### Image Segmentation
 
+![CV-RNN Dynamics](plots/myplot.png)
+
 ```python
 from cvrnn import CVRNN
 
@@ -75,6 +77,8 @@ target time 3 seconds. Both inputs target MATLAB nodes 51:150 (Python slice
 Initial states are calculated by inverse evolution; simultaneous inputs are
 added, not multiplied. One synchrony threshold decodes the result without
 applying Boolean XOR in Python.
+
+![xor_plot](plots/ring_network_xor.png)
 
 Run from the repository root in the existing Conda environment; no dependency
 sync or MATLAB installation is needed:
@@ -117,6 +121,8 @@ and initial-state arrays for that comparison.
 `matlab/budzinskiEAexact/cvnn_memory_task.m`: 321 nodes, coupling strength 45,
 phase lag 1.55, and natural frequency 10 Hz. It shares the double-precision
 Fourier solver in `src/cv_rnn/cv_nn.py` with XOR.
+
+![memory_plot](plots/ring_network_memory.png)
 
 ```bash
 python -m src.cv_rnn memory
@@ -171,6 +177,8 @@ MATLAB/Octave cross-runtime verification still requires shared numerical inputs.
 It is inspired by the paper, not an exact reproduction of Figure 4: the local
 input description is ambiguous about addition versus multiplication, and the
 original alphabet in Supplementary Note 8 is not available locally.
+
+![message_decoding](plots/ring_network_messaging_decoding.png)
 
 ```bash
 python -m src.cv_rnn message
@@ -229,6 +237,8 @@ is not guaranteed to hide every character either; the default `--receiver-seed 9
 experiment currently returns `H????`. The CLI reports these outcomes rather than
 forcing wrong-key failure. Seeds here are reproducibility controls, not
 cryptographic randomness.
+
+![erasure_plot](plots/ring_network_messaging_erasure.png)
 
 This is an in-memory transmission simulation, not a network transport or secure
 file format. Public framing exposes message length. Each default character uses
