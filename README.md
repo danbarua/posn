@@ -44,7 +44,7 @@ pip install -r requirements.txt
 
 ### Image Segmentation
 
-![CV-RNN Dynamics](plots/myplot.png)
+![Two-shape segmentation comparison](plots/segmentation-2shapes.png)
 
 `src/cv_rnn/cv_rnn_segmentation.py` ports
 `matlab/liboniEA2025image/image_segmentation/run_2layer.m` and
@@ -66,6 +66,12 @@ python -m pytest tests/test_segmentation_math.py tests/test_segmentation_animati
 
 `--plot` shows the input, background mask, and cluster map, the animated
 phase dynamics, and the spectral-clustering projection in one window.
+Layer-1 animation uses per-frame scaled viridis (paper Fig. 3A); HSV
+fixed to [-π, π] is layer 2 only. Saved counterparts:
+
+![Three-shape segmentation](plots/segmentation-3shapes.png)
+
+![Natural-image segmentation](plots/segmentation-natural.png)
 
 ```python
 import torch

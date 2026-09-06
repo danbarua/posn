@@ -7,6 +7,17 @@ from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 
 
+def _finite_clim(values: np.ndarray) -> tuple[float, float]:
+    """Return a non-degenerate (vmin, vmax) covering ``values``."""
+    if values.size == 0:
+        return -np.pi, np.pi
+    vmin, vmax = float(np.min(values)), float(np.max(values))
+    if vmax > vmin:
+        return vmin, vmax
+    pad = 1e-12 if vmin == 0.0 else abs(vmin) * 1e-12
+    return vmin - pad, vmax + pad
+
+
 def animate_dynamics(
     states: np.ndarray | torch.Tensor,
     image_shape: tuple[int, int],
@@ -14,36 +25,19 @@ def animate_dynamics(
     *,
     interval: int = 100,
 ) -> tuple[Figure, FuncAnimation]:
+    """Animate phase dynamics with paper Fig. 3 colormap conventions.
+
+    Layer 1 uses viridis scaled to each frame's finite phase range. Layer-1
+    coupling (α=0.5, σ=0.9) globally phase-locks within a few steps; the
+    background/foreground split that the mask reads is a milliradian offset
+    around a shared phase. HSV is circular, so that offset maps both clusters
+    to red. A sequential map with per-frame scaling makes it visible, matching
+    the paper's "phase (scaled)" panels.
+
+    Layer 2 uses HSV over [-π, π]. Masked (NaN) pixels are white.
+
+    ``states`` is complex ``(H*W, T)`` in MATLAB column-major pixel order.
     """
-    Animate complex phase dynamics with transparent NaN backgrounds.
-
-    Parameters
-    ----------
-    states : np.ndarray | torch.Tensor
-        Complex array of shape (N, T) where N is total pixels (H*W in F-order)
-        and T is number of timesteps.
-    image_shape : tuple[int, int]
-        (H, W) dimensions of the image.
-    layer_1_steps : int, optional
-        Timestep where layer 1 ends (default 60). Color limits switch to [-π, π]
-        starting at this index.
-    interval : int, optional
-        Milliseconds between frames (default 100).
-
-    Returns
-    -------
-    fig : matplotlib.figure.Figure
-        The figure containing the animation.
-    anim : matplotlib.animation.FuncAnimation
-        The animation object.
-
-    Raises
-    ------
-    ValueError
-        If states is not 2-D, image_shape does not match states shape,
-        layer_1_steps is out of range, or complex input is required.
-    """
-    # Convert torch to numpy
     if isinstance(states, torch.Tensor):
         states = states.detach().cpu().numpy()
 
@@ -69,68 +63,51 @@ def animate_dynamics(
     if interval <= 0:
         raise ValueError(f"interval must be positive, got {interval}")
 
-    # Create figure and axis
+    layer1_cmap = plt.get_cmap("viridis").copy()
+    layer1_cmap.set_bad("#ffffff")
+    layer2_cmap = plt.get_cmap("hsv").copy()
+    layer2_cmap.set_bad("#ffffff")
+
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.axis("off")
 
-    # Initial frame: reshape from F-order flat to (H, W)
-    phase_0 = np.angle(states[:, 0])
-    phase_image_0 = phase_0.reshape((H, W), order="F")
+    phase_image_0 = np.ma.masked_invalid(
+        np.angle(states[:, 0]).reshape((H, W), order="F")
+    )
+    if layer_1_steps == 0:
+        cmap0, clim0 = layer2_cmap, (-np.pi, np.pi)
+    else:
+        cmap0, clim0 = layer1_cmap, _finite_clim(phase_image_0.compressed())
 
-    # Create initial imshow with hsv colormap
     im = ax.imshow(
         phase_image_0,
-        cmap="hsv",
+        cmap=cmap0,
         interpolation="nearest",
-        vmin=-np.pi,
-        vmax=np.pi,
+        vmin=clim0[0],
+        vmax=clim0[1],
     )
 
-    # Set initial alpha based on NaN values
-    alpha_0 = ~np.isnan(phase_image_0)
-    im.set_alpha(alpha_0.astype(float))
-
-    # Title and text for iteration counter
     title = ax.set_title("")
-    layer_label = ax.text(0.02, 0.98, "", transform=ax.transAxes, 
-                          verticalalignment="top", fontsize=10)
+    layer_label = ax.text(
+        0.02, 0.98, "", transform=ax.transAxes, verticalalignment="top", fontsize=10
+    )
 
     def update(frame_idx: int):
-        """Update function for FuncAnimation."""
-        # Reshape from F-order flat to (H, W)
-        phase = np.angle(states[:, frame_idx])
-        phase_image = phase.reshape((H, W), order="F")
-
-        # Update image data
+        phase_image = np.ma.masked_invalid(
+            np.angle(states[:, frame_idx]).reshape((H, W), order="F")
+        )
         im.set_data(phase_image)
-
-        # Update alpha: transparent where NaN, opaque elsewhere
-        alpha = ~np.isnan(phase_image)
-        im.set_alpha(alpha.astype(float))
-
-        # Adjust color limits based on layer
         if frame_idx >= layer_1_steps:
+            im.set_cmap(layer2_cmap)
             im.set_clim(-np.pi, np.pi)
+            layer_label.set_text(f"Layer 2, iteration {frame_idx + 1}")
         else:
-            # A symmetric range around zero hides small differences around a
-            # nonzero common phase. Scale the actual phase range, without clipping.
-            valid = phase_image[np.isfinite(phase_image)]
-            if valid.size:
-                im.set_clim(float(valid.min()), float(valid.max()))
-
-        # Update title and layer label
-        title.set_text(f"t={frame_idx + 1}")
-        if frame_idx < layer_1_steps:
+            im.set_cmap(layer1_cmap)
+            im.set_clim(*_finite_clim(phase_image.compressed()))
             layer_label.set_text(f"Layer 1, iteration {frame_idx + 1}")
-        else:
-            layer_label.set_text(
-                f"Layer 2, iteration {frame_idx - layer_1_steps + 1}"
-            )
-
+        title.set_text(f"t={frame_idx + 1}")
         return [im, title, layer_label]
 
-    # Create animation using FuncAnimation without blitting
-    # (blitting fails with alpha changes)
     anim = FuncAnimation(
         fig,
         update,
