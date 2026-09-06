@@ -17,13 +17,14 @@ import scipy.io as sio
 import torch
 from sklearn.metrics import adjusted_rand_score
 
+from defns import DATA_DIR
+
 # ---- module under test -------------------------------------------------
 from src.cv_rnn import (
     run_2layer_torch,
     spatiotemporal_segmentation_torch,
 )
 
-DATA_DIR = Path(__file__).parent / "reference"
 DEVICE = torch.device("cpu")  # keep GPU out of the loop for CI
 DTYPE = torch.float32
 SEED = 1  # must match MATLAB ‘seed’ arg
