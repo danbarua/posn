@@ -6,15 +6,16 @@ backwards from complex target states, then added when both inputs are active.
 Only the shared-cluster synchrony readout is nonlinear; there is no Boolean XOR.
 """
 
-import cmath
 import math
 
 import matplotlib.pyplot as plt
 import torch
 from matplotlib.figure import Figure
 
+from .cv_nn import RingCVNN
 
-class XorCVNN:
+
+class XorCVNN(RingCVNN):
     """Distance-coupled ring with the MATLAB XOR parameters.
 
     Defaults reproduce N=201, epsilon=50, phi=1.56, and f=10 Hz. The shared
@@ -26,55 +27,8 @@ class XorCVNN:
     def __init__(self, N: int = 201, device: str | torch.device = "cpu") -> None:
         if N < 4:
             raise ValueError("N must be at least 4 for a central synchronized cluster")
-        self.N = N
-        self.device = torch.device(device)
+        super().__init__(N, epsilon=50.0, phi=1.56, device=device)
         self.cluster = slice(N // 4, 3 * N // 4)
-
-        idx = torch.arange(N, dtype=torch.float64, device=self.device)
-        distance = (idx[:, None] - idx[None, :]).abs()
-        distance = torch.minimum(distance, N - distance)
-        distance.fill_diagonal_(math.inf)
-        adjacency = distance.reciprocal()  # power-law exponent alpha=1
-        adjacency /= adjacency[0].sum()
-
-        self._K = 50.0 * cmath.exp(-1.56j) * adjacency
-        self._M = self._K.clone()
-        self._M.diagonal().add_(1j * 2 * math.pi * 10.0)
-        # MATLAB's negative-sign Fourier basis diagonalizes this circulant K.
-        self._rates = torch.fft.fft(self._K[0]) + 1j * 2 * math.pi * 10.0
-
-    @property
-    def K(self) -> torch.Tensor:
-        """Complex coupling K = epsilon * exp(-i*phi) * adjacency."""
-        return self._K
-
-    @property
-    def M(self) -> torch.Tensor:
-        """Full linear operator M = i*omega*I + K."""
-        return self._M
-
-    def evolve(
-        self, x0: torch.Tensor, times: torch.Tensor | list[float]
-    ) -> torch.Tensor:
-        """Return complex states (N, len(times)) at times in seconds.
-
-        Negative times implement the inverse dynamics. FFTs apply the same
-        orthonormal Fourier basis as MATLAB's circulant_eigensystem, without
-        constructing eigenvectors or assuming a generic eigensolver is unitary.
-        """
-        x0 = torch.as_tensor(x0, dtype=torch.complex128, device=self.device)
-        times = torch.as_tensor(times, dtype=torch.float64, device=self.device)
-        if x0.shape != (self.N,) or times.ndim != 1:
-            raise ValueError("Expected x0 with shape (N,) and one-dimensional times")
-        coefficients = torch.fft.ifft(x0, norm="ortho")
-        modes = coefficients[:, None] * torch.exp(self._rates[:, None] * times)
-        return torch.fft.fft(modes, dim=0, norm="ortho")
-
-    def design_input(
-        self, target: torch.Tensor, target_time: float = 3.0
-    ) -> torch.Tensor:
-        """Calculate x(0) = exp(-M*target_time) target, preserving amplitudes."""
-        return self.evolve(target, [-target_time])[:, 0]
 
     def xor_inputs(
         self, target_time: float = 3.0, seed: int = 1
@@ -214,17 +168,3 @@ class XorCVNN:
             ylim=(-math.pi, math.pi),
         )
         return phase_figure, state_figure
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="MATLAB-reference cv-NN XOR demo")
-    parser.add_argument(
-        "--plot", action="store_true", help="show all four trajectories"
-    )
-    args = parser.parse_args()
-    table = XorCVNN().truth_table(plot=args.plot)
-    print("XOR truth table (shared-cluster synchrony at 3 s)\n X  Y | f(X,Y)")
-    for (x, y), output in sorted(table.items()):
-        print(f" {x}  {y} |   {output}")
