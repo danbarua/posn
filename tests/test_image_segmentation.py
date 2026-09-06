@@ -1,5 +1,5 @@
 """
-test_cv_rnn.py
+test_image_segmentation.py
 
 Intended as a CI-server smoke test to verify the outputs of the Python port
 against the MATLAB reference implementation.
