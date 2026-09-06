@@ -1,159 +1,150 @@
-import torch
+# Animation API replacement for plot_dynamics and plot_dynamics_animated.
+# This module provides animate_dynamics(), the canonical animation function.
+# (plot_dynamics and plot_dynamics_animated are removed as per contract.)
+
 import numpy as np
+import torch
+from matplotlib.figure import Figure
+from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 
-from matplotlib.animation import FuncAnimation
 
-
-def plot_dynamics(
-    x: np.ndarray, im: np.ndarray | torch.Tensor, layer_1_final_time: int
-):
+def animate_dynamics(
+    states: np.ndarray | torch.Tensor,
+    image_shape: tuple[int, int],
+    layer_1_steps: int = 60,
+    *,
+    interval: int = 100,
+) -> tuple[Figure, FuncAnimation]:
     """
-    Replicates the MATLAB `plot_dynamics` routine in Python/Matplotlib.
+    Animate complex phase dynamics with transparent NaN backgrounds.
 
     Parameters
     ----------
-    x : np.ndarray
-        A 2-D array of (H * W, T) complex values.
-    im : np.ndarray | torch.Tensor
-        (H,W) for shape only
-    layer_1_final_time : int
-        Time index at which the colour limits switch to [-π, π].
+    states : np.ndarray | torch.Tensor
+        Complex array of shape (N, T) where N is total pixels (H*W in F-order)
+        and T is number of timesteps.
+    image_shape : tuple[int, int]
+        (H, W) dimensions of the image.
+    layer_1_steps : int, optional
+        Timestep where layer 1 ends (default 60). Color limits switch to [-π, π]
+        starting at this index.
+    interval : int, optional
+        Milliseconds between frames (default 100).
 
     Returns
     -------
-    matplotlib.axes.Axes
-        The Axes instance that contains the image.
+    fig : matplotlib.figure.Figure
+        The figure containing the animation.
+    anim : matplotlib.animation.FuncAnimation
+        The animation object.
+
+    Raises
+    ------
+    ValueError
+        If states is not 2-D, image_shape does not match states shape,
+        layer_1_steps is out of range, or complex input is required.
     """
+    # Convert torch to numpy
+    if isinstance(states, torch.Tensor):
+        states = states.detach().cpu().numpy()
 
-    H, W = im.shape
-    # x is (H * W, T)
-    # we need (H, W, T)
-    x = x.reshape((H, W, -1))
+    if states.ndim != 2:
+        raise ValueError(f"`states` must be a 2-D array (N, T), got shape {states.shape}")
 
-    if x.ndim != 3:
-        raise ValueError("`x` must be a 3-D array (H, W, T).")
+    if not np.iscomplexobj(states):
+        raise ValueError("`states` must be complex-valued")
 
-    plot_dynamics_animated(x, layer_1_final_time)
-    return
+    H, W = image_shape
+    N, T = states.shape
 
-    # --- initial plot --------------------------------------------------------
-    fig, ax = plt.subplots()
-    im = ax.imshow(np.angle(x[:, :, 0]), cmap="hsv", interpolation="nearest")
+    if N != H * W:
+        raise ValueError(
+            f"Total pixels N={N} does not match image shape H*W={H*W}"
+        )
+
+    if layer_1_steps < 0 or layer_1_steps >= T:
+        raise ValueError(
+            f"layer_1_steps={layer_1_steps} out of range [0, {T})"
+        )
+
+    if interval <= 0:
+        raise ValueError(f"interval must be positive, got {interval}")
+
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(8, 6))
     ax.axis("off")
-    ax.set_title("")  # Keep title area free
-    ax.set_xlabel("")  # Remove any axes labels
-    ax.set_ylabel("")
 
-    # Use a consistent font (like the original 'arial')
-    plt.rcParams.update({"font.size": 15, "font.family": "Arial"})
+    # Initial frame: reshape from F-order flat to (H, W)
+    phase_0 = np.angle(states[:, 0])
+    phase_image_0 = phase_0.reshape((H, W), order="F")
 
-    # Timesteps text in the same spot used in the MATLAB code
-    t1 = ax.text(13, -1, "1", fontsize=15, fontname="Arial")
+    # Create initial imshow with hsv colormap
+    im = ax.imshow(
+        phase_image_0,
+        cmap="hsv",
+        interpolation="nearest",
+        vmin=-np.pi,
+        vmax=np.pi,
+    )
 
-    # -------------------------------------------------------------------------
-    times = range(1, min(180, x.shape[2]))  # MATLAB 2:180  -> Python 1 .. 179
-    for ii in times:
-        tmp = x[:, :, ii]
-        tmp = np.angle(tmp)
+    # Set initial alpha based on NaN values
+    alpha_0 = ~np.isnan(phase_image_0)
+    im.set_alpha(alpha_0.astype(float))
+
+    # Title and text for iteration counter
+    title = ax.set_title("")
+    layer_label = ax.text(0.02, 0.98, "", transform=ax.transAxes, 
+                          verticalalignment="top", fontsize=10)
+
+    def update(frame_idx: int):
+        """Update function for FuncAnimation."""
+        # Reshape from F-order flat to (H, W)
+        phase = np.angle(states[:, frame_idx])
+        phase_image = phase.reshape((H, W), order="F")
+
         # Update image data
-        im.set_data(tmp)
+        im.set_data(phase_image)
 
-        # Handle transparency (AlphaData in MATLAB)
-        alpha = ~np.isnan(tmp)  # True where data is NOT NaN
+        # Update alpha: transparent where NaN, opaque elsewhere
+        alpha = ~np.isnan(phase_image)
         im.set_alpha(alpha.astype(float))
 
-        # Update colour limits after `layer_1_final_time`
-        if ii > layer_1_final_time:
-            im.set_clim(-np.pi, np.pi)
-
-        # Update the text string
-        t1.set_text(f"{ii + 1} timesteps")  # MATLAB indices start at 1
-
-        # Let Matplotlib redraw
-        plt.pause(0.1)
-
-    return ax
-
-
-def plot_dynamics_animated(x: np.ndarray, layer_1_final_time: int):
-    """
-    Animate the phase dynamics of the network using matplotlib's FuncAnimation.
-
-    Parameters:
-    -----------
-    x : np.ndarray
-        A 3D array (H, W, T) containing the phase dynamics.
-    layer_1_final_time : int
-        The timestep after which color limits are constrained to [-π, π].
-
-    Returns:
-    --------
-    anim : FuncAnimation
-        The matplotlib animation object.
-    """
-    if x.ndim != 3:
-        raise ValueError("`x` must be a 3-D array (H, W, T).")
-
-    fig, ax = plt.subplots()
-    plt.rcParams.update({"font.size": 15, "font.family": "Arial"})
-    ax.axis("off")
-
-    # Initial image plot with the first timestep
-    im = ax.imshow(np.angle(x[:, :, 0]), cmap="hsv", interpolation="nearest", alpha=1.0)
-
-    # Set initial color limits if needed
-    # Here we initially do not limit, as in MATLAB code
-    # Color limits will be set in update function conditionally
-
-    # Add text annotation for timestep display at (13, -1)
-    t1 = ax.text(13, -1, "1", fontsize=15, fontname="Arial")
-
-    # Define update function for FuncAnimation
-    def update(ii):
-        phase_data = np.angle(x[:, :, ii])
-
-        im.set_data(phase_data)
-        # Set transparency: opaque where not NaN, transparent where NaN
-        alpha = ~np.isnan(phase_data)
-        im.set_alpha(alpha.astype(float))
-
-        # Update color limits after layer_1_final_time
-        if ii > layer_1_final_time:
+        # Adjust color limits based on layer
+        if frame_idx >= layer_1_steps:
             im.set_clim(-np.pi, np.pi)
         else:
-            # If before or equal to layer_1_final_time, autoscale color limits
-            im.autoscale()
+            # Before layer 2, auto-scale to show phase variation
+            valid_mask = ~np.isnan(phase_image)
+            if np.any(valid_mask):
+                valid_phases = phase_image[valid_mask]
+                if len(valid_phases) > 0:
+                    vmin, vmax = np.percentile(valid_phases, [5, 95])
+                    # Ensure symmetric range for better visualization
+                    vmax = max(abs(vmin), abs(vmax))
+                    vmin = -vmax
+                    im.set_clim(vmin, vmax)
 
-        # Update text with timestep (1-based index)
-        t1.set_text(f"{ii + 1} timesteps")
+        # Update title and layer label
+        title.set_text(f"t={frame_idx + 1}")
+        if frame_idx < layer_1_steps:
+            layer_label.set_text(f"Layer 1, iteration {frame_idx + 1}")
+        else:
+            layer_label.set_text(
+                f"Layer 2, iteration {frame_idx - layer_1_steps + 1}"
+            )
 
-        return im, t1
+        return [im, title, layer_label]
 
-    # Create animation: interval in ms to match ~0.1s pause in MATLAB code
-    frames = min(180, x.shape[2])
-    anim = FuncAnimation(fig, update, frames=frames, interval=200, blit=True)
+    # Create animation using FuncAnimation without blitting
+    # (blitting fails with alpha changes)
+    anim = FuncAnimation(
+        fig,
+        update,
+        frames=range(T),
+        interval=interval,
+        blit=False,
+        repeat=True,
+    )
 
-    ax.set_xlim(0, x.shape[1])
-    ax.set_ylim(x.shape[0], 0)
-    ax.set_aspect("equal")
-
-    return anim
-
-
-def anim_test():
-    x = np.random.rand(10, 10, 50) * 2 * np.pi - np.pi  # (H, W, T)
-    fig, ax = plt.subplots()
-    im = ax.imshow(np.angle(x[:, :, 0]), cmap="hsv")
-
-    def update(i):
-        data = np.angle(x[:, :, i])
-        im.set_data(data)
-        return (im,)
-
-    ani = FuncAnimation(fig, update, frames=50, interval=100, blit=True)
-    plt.show()
-
-
-if __name__ == "__main__":
-    anim_test()
+    return fig, anim

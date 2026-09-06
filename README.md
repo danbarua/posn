@@ -46,27 +46,50 @@ pip install -r requirements.txt
 
 ![CV-RNN Dynamics](plots/myplot.png)
 
+`src/cv_rnn/cv_rnn_segmentation.py` ports
+`matlab/liboniEA2025image/image_segmentation/run_2layer.m` and
+`spatiotemporal_segmentation.m`: raw two-layer matrix recurrence
+`x ← (K + i·diag(ω))x` (no Euler step, no unit-circle renormalization), a
+strict-majority mean-phase background mask, and inclusive-window phase-only
+clustering. State vectors use MATLAB column-major pixel order.
+
+Run from the repository root in the existing Conda environment against the
+bundled `datasets/2shapes.mat`, `3shapes.mat`, and `natural_image.mat`; no
+dependency sync, download, or MATLAB installation is needed:
+
+```bash
+conda activate posn
+python -m src.cv_rnn segmentation --dataset 2shapes --image-index 0 --n-clusters 2
+python -m src.cv_rnn segmentation --dataset natural --n-clusters 2 --plot
+python -m pytest tests/test_segmentation_math.py tests/test_segmentation_animation.py -q
+```
+
+`--plot` shows the input, background mask, and cluster map, the animated
+phase dynamics, and the spectral-clustering projection in one window.
+
 ```python
-from cvrnn import CVRNN
-
-# Initialize the CV-RNN
-cvrnn = CVRNN(device="cuda" if torch.cuda.is_available() else "cpu")
-
-# Load an image
-img = load_test_image('shapes', size=64)
-
-# Segment the image
-segments, dynamics = cvrnn.segment(
-    img, 
-    a_vals=[0.5, 0.5],      # Connection strengths [layer1, layer2]
-    s_vals=[0.9, 0.0313],   # Spatial scales [layer1, layer2]
-    nt=[60, 140],           # Time steps [end of layer1, total]
-    n_clusters=3            # Number of clusters for segmentation
+import torch
+from src.cv_rnn import (
+    run_2layer_torch,
+    spatiotemporal_segmentation_torch,
+    animate_dynamics,
 )
 
-# Visualize the results
-visualize_segmentation(img, segments, dynamics)
+image = torch.zeros(32, 32, dtype=torch.float64)  # frequencies, radians/step
+states, mask = run_2layer_torch(image, generator=torch.Generator().manual_seed(1))
+cluster_map, rho, V, D, projection = spatiotemporal_segmentation_torch(
+    states, image, mask, n_clusters=2, nt_mask=60,
+)
+fig, anim = animate_dynamics(states, tuple(image.shape))
 ```
+
+`rho`, `V`, `D`, and `projection` contain only foreground (unmasked) nodes,
+in original pixel order; `cluster_map` is image-shaped with `-1` for
+background. `tests/test_segmentation_math.py` checks the recurrence,
+masking, and eigensystem against independent NumPy/SciPy equations, not
+production helpers; `tests/test_image_segmentation.py` is a MATLAB
+cross-runtime parity check that stays skipped until reference `.mat` exports
+are added under `datasets/`.
 
 ### XOR Computation
 

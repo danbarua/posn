@@ -54,7 +54,7 @@ def _phase_mse(a, b):
 # ----------------------------------------------------------------------- #
 @pytest.mark.parametrize("demo_name", ["2shapes", "3shapes", "natural"])
 def test_cv_rnn_against_matlab(demo_name):
-    ref_file = DATA_DIR / f"{demo_name}_ref.mat"
+    ref_file = Path(DATA_DIR) / f"{demo_name}_ref.mat"
     if not ref_file.exists():
         pytest.skip(f"reference file {ref_file} missing")
 

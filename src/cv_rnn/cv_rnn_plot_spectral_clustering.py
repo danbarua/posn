@@ -1,62 +1,108 @@
 import numpy as np
+import torch
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # needed for 3D plotting
-from sklearn.cluster import KMeans
 
-def plot_spectral_clustering(prj: np.ndarray, x: np.ndarray, phase_iter: int = 120) -> np.ndarray:
+
+def plot_spectral_clustering(
+    prj: np.ndarray | torch.Tensor,
+    x: np.ndarray | torch.Tensor,
+    phase_iter: int = 120,
+) -> Figure:
     """
-    Visualize the result of spectral clustering in 3D and perform KMeans clustering.
+    Create a 3D scatter plot of spectral clustering projection colored by phase.
 
-    Parameters:
-        prj        : np.ndarray of shape (N, 3, W)
-                     The projection matrix over sliding windows.
-        x          : np.ndarray of shape (N, T) (complex valued)
-                     The complex state from which the phase is computed.
-        phase_iter : int, optional (default: 120)
-                     The iteration index for phase visualization (MATLAB index 120 converts to Python index 119).
+    Parameters
+    ----------
+    prj : np.ndarray | torch.Tensor
+        Projection array of shape (N_fg, n_dims, n_windows) where N_fg is the
+        number of foreground nodes, n_dims is typically 3 (for 3D plot), and
+        n_windows is the number of sliding windows. Contains foreground rows only.
+    x : np.ndarray | torch.Tensor
+        Complex state array of shape (N_fg, T) containing foreground nodes only.
+    phase_iter : int, optional
+        MATLAB-style 1-based iteration index for phase coloring (default 120).
+        This is converted to 0-based Python index internally.
 
-    Returns:
-        predict    : np.ndarray of shape (N,)
-                     Cluster labels (0 or 1) for each data point based on the last window’s projection.
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure containing the 3D scatter plot.
+
+    Raises
+    ------
+    ValueError
+        If phase_iter is out of bounds or array dimensions are inconsistent.
     """
-    # Select the last window index.
-    # In MATLAB: w = size(prj, 3); then prj(:, :, w)
-    last_window = prj[:, :, -1]
+    # Convert torch to numpy
+    if isinstance(prj, torch.Tensor):
+        prj = prj.detach().cpu().numpy()
+    if isinstance(x, torch.Tensor):
+        x = x.detach().cpu().numpy()
 
-    # Get colours from the phase of x at iteration 'phase_iter'.
-    # MATLAB uses x(:,120) where Python indices are 0 based.
-    # Make sure that phase_iter does not exceed x.shape[1].
-    phase_index = phase_iter - 1
-    if phase_index >= x.shape[1]:
-        raise ValueError(f"phase_iter ({phase_iter}) is out of bounds for x with shape {x.shape}")
+    # Validate dimensions
+    if prj.ndim != 3:
+        raise ValueError(f"`prj` must be 3-D array (N, n_dims, n_windows), got shape {prj.shape}")
+    if x.ndim != 2:
+        raise ValueError(f"`x` must be 2-D array (N, T), got shape {x.shape}")
+    if not np.iscomplexobj(x):
+        raise ValueError("`x` must be complex-valued")
 
-    colors = np.angle(x[:, phase_index])
+    n_fg = prj.shape[0]
+    n_dims = prj.shape[1]
+    n_windows = prj.shape[2]
+    n_samples, n_timesteps = x.shape
 
-    # Create figure and 3D axis.
-    fig = plt.figure(figsize=(5.5, 3.3))  # approximate conversion from MATLAB's position
-    ax = fig.add_subplot(111, projection='3d')
+    if n_fg != n_samples:
+        raise ValueError(
+            f"First dimension of prj ({n_fg}) does not match first dimension of x ({n_samples})"
+        )
 
-    # Create scatter plot for the projection (dimensions 1, 2 and 3).
-    sc = ax.scatter(last_window[:, 0], last_window[:, 1], last_window[:, 2],
-                    s=50, c=colors, cmap='hsv', marker='o', depthshade=True)
-    sc.set_clim([-np.pi, np.pi])
+    # Convert phase_iter to 0-based index
+    phase_idx = phase_iter - 1
+    if phase_idx < 0 or phase_idx >= n_timesteps:
+        raise ValueError(
+            f"phase_iter={phase_iter} (0-based index {phase_idx}) out of bounds for x with T={n_timesteps}"
+        )
 
-    # Set labels and title.
-    ax.set_xlabel('dimension 1', fontname='Arial', fontsize=15)
-    ax.set_ylabel('dimension 2', fontname='Arial', fontsize=15)
-    ax.set_zlabel('dimension 3', fontname='Arial', fontsize=15)
-    ax.set_title('similarity projection', fontsize=15)
+    if n_dims < 3:
+        raise ValueError(
+            f"Need at least 3 dimensions for 3D plot, got n_dims={n_dims}"
+        )
 
-    # Add a colorbar with label.
-    cbar = plt.colorbar(sc, ax=ax, pad=0.1)
-    cbar.set_label('phase (rad)', fontsize=15)
+    # Extract last window projection
+    last_proj = prj[:, :3, -1]  # (N_fg, 3) - take first 3 dimensions
 
-    plt.show()
+    # Get phase colors from x at phase_iter
+    phase = np.angle(x[:, phase_idx])  # (N_fg,)
 
-    # Run KMeans on the last window's projection data.
-    # MATLAB clusters prj(:,1:3,end), which in Python is last_window (shape (N,3))
-    kmeans = KMeans(n_clusters=2, random_state=0)
-    # Fit and predict the cluster labels.
-    predict = kmeans.fit_predict(last_window)
+    # Create figure with 3D subplot
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111, projection="3d")
 
-    return predict
+    # Create scatter plot
+    scatter = ax.scatter(
+        last_proj[:, 0],
+        last_proj[:, 1],
+        last_proj[:, 2],
+        c=phase,
+        cmap="hsv",
+        s=50,
+        alpha=0.8,
+        edgecolors="none",
+    )
+
+    # Set phase colormap limits to [-π, π]
+    scatter.set_clim([-np.pi, np.pi])
+
+    # Add colorbar
+    cbar = plt.colorbar(scatter, ax=ax, pad=0.1, shrink=0.8)
+    cbar.set_label("phase (rad)", fontsize=10)
+
+    # Set labels
+    ax.set_xlabel("dimension 1", fontsize=10)
+    ax.set_ylabel("dimension 2", fontsize=10)
+    ax.set_zlabel("dimension 3", fontsize=10)
+    ax.set_title("spectral clustering projection", fontsize=11)
+
+    return fig
