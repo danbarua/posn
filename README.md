@@ -2,7 +2,7 @@
 
 This repository provides a PyTorch implementation of Complex-Valued Recurrent Neural Networks (cv-RNNs) for image segmentation and computational tasks as described in the following papers:
 
-- [Image segmentation with traveling waves in an exactly solvable recurrent neural network](https://arxiv.org/abs/2311.16943) by Liboni et al. (2023)
+- [Image segmentation with traveling waves in an exactly solvable recurrent neural network](https://doi.org/10.1073/pnas.2321319121) by Liboni et al. (PNAS, 2025; preprint: [arXiv:2311.16943](https://arxiv.org/abs/2311.16943))
 - [An exact mathematical description of computation with transient spatiotemporal dynamics in a complex-valued neural network](https://doi.org/10.1038/s42005-024-01728-0) by Budzinski et al. (2024)
 
 ## Overview
@@ -16,7 +16,7 @@ This project explores a novel approach to neural network design where:
 
 Unlike traditional deep learning approaches that require extensive training, these cv-RNNs perform tasks like image segmentation using sophisticated spatiotemporal dynamics with a *single set of fixed weights*.
 
-![CV-RNN Dynamics](https://github.com/danbarua/posn/assets/images/dynamics.png)
+![CV-RNN Dynamics](plots/two-shapes-dynamics.gif)
 
 ## Features
 
@@ -310,25 +310,30 @@ The cv-RNN approach offers several advantages:
 - Rich spatiotemporal dynamics for versatile applications
 - Biologically plausible computational mechanism
 
-Performance comparison for image segmentation tasks:
-
-| Method | Adjusted Rand Index | Training Required |
-|--------|---------------------|-------------------|
-| CV-RNN | 0.93                | No                |
-| K-means | 0.67               | No                |
-| Watershed | 0.75             | No                |
-| U-Net | 0.91                 | Yes               |
+Reported accuracy for image segmentation (Liboni et al. 2023, *SI Appendix* section III;
+see `docs/references/02_supplementary.md`): **93%** of pixels correctly clustered across
+1,000 nonoverlapping two-shape images, and **86%** across 1,000 nonoverlapping three-shape
+images. This is fraction of correctly clustered pixels, not Adjusted Rand Index, and the
+paper reports no comparison against K-means, watershed, or U-Net baselines on this task;
+an earlier version of this table fabricated such a comparison and has been removed. This
+repository's own `foreground_ari`/`background_pixel_accuracy` (see Image Segmentation above)
+are per-image metrics on the three bundled examples, not a reproduction of the paper's
+1,000-image benchmark, which is not bundled here.
 
 ## Citations
 
 If you use this code in your research, please cite the original papers:
 
 ```bibtex
-@article{liboni2023image,
+@article{liboni2025image,
   title={Image segmentation with traveling waves in an exactly solvable recurrent neural network},
   author={Liboni, Luisa H. B. and Budzinski, Roberto C. and Busch, Alexandra N. and L{\"o}we, Sindy and Keller, Thomas A. and Welling, Max and Muller, Lyle E.},
-  journal={arXiv preprint arXiv:2311.16943},
-  year={2023}
+  journal={Proceedings of the National Academy of Sciences},
+  volume={122},
+  number={1},
+  pages={e2321319121},
+  year={2025},
+  doi={10.1073/pnas.2321319121}
 }
 
 @article{budzinski2024exact,

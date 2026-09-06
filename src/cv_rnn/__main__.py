@@ -1,20 +1,18 @@
 """Run the computational cv-NN examples from the repository root."""
 
 import argparse
-import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import scipy.io as sio
-import torch
-
-from defns import DATA_DIR
 from .cv_nn_memory import MemoryCVNN
 from .cv_nn_message import MessageDemo, MessageKey
 from .cv_nn_plot_phase_dynamics import animate_dynamics
 from .cv_nn_xor import XorCVNN
-from .cv_rnn_plot_spectral_clustering import plot_spectral_clustering
-from .cv_rnn_segmentation import run_2layer_torch, spatiotemporal_segmentation_torch
+from .segmentation_demo import (
+    plot_segmentation_comparison,
+    run_segmentation_example,
+    save_segmentation_comparison,
+)
 
 
 def main() -> None:
@@ -54,6 +52,7 @@ def main() -> None:
         "--dt", type=float, default=0.01, help="receiver sampling interval in seconds"
     )
     segmentation_parser = task_parsers["segmentation"]
+    segmentation_parser.set_defaults(seed=None)
     segmentation_parser.add_argument(
         "--dataset",
         choices=("2shapes", "3shapes", "natural"),
@@ -67,7 +66,10 @@ def main() -> None:
         help="image 0, 1, or 2 within the 2shapes/3shapes dataset",
     )
     segmentation_parser.add_argument(
-        "--n-clusters", type=int, default=2, help="requested foreground segment count"
+        "--n-clusters", type=int, help="override dataset-specific foreground segment count"
+    )
+    segmentation_parser.add_argument(
+        "--output-dir", type=Path, help="save comparison PNG, animated GIF, inputs and metrics"
     )
     args = parser.parse_args()
 
@@ -90,45 +92,25 @@ def main() -> None:
             memory.plot(result)
             plt.show()
     elif args.task == "segmentation":
-        dataset_files = {
-            "2shapes": "2shapes.mat",
-            "3shapes": "3shapes.mat",
-            "natural": "natural_image.mat",
-        }
-        mat = sio.loadmat(Path(DATA_DIR) / dataset_files[args.dataset])
-        if args.dataset == "natural":
-            image = torch.from_numpy(mat["im"]).to(torch.float64)
-        else:
-            image = torch.from_numpy(
-                mat["images"][:, :, args.image_index].astype("float64")
+        try:
+            example = run_segmentation_example(
+                args.dataset, args.image_index, seed=args.seed, n_clusters=args.n_clusters
             )
-        generator = torch.Generator().manual_seed(args.seed)
-        states, mask = run_2layer_torch(image, generator=generator, dtype=torch.float64)
-        cluster_map, _, _, _, projection = spatiotemporal_segmentation_torch(
-            states, image, mask, n_clusters=args.n_clusters, nt_mask=60
-        )
-        background = int(mask.sum())
+        except (ValueError, FileNotFoundError) as error:
+            segmentation_parser.error(str(error))
         print(
-            f"Segmented {args.dataset} image {args.image_index}: "
-            f"{background} background px of {mask.numel()}, "
-            f"{args.n_clusters} requested clusters"
+            f"{example.dataset} image {example.image_index}: MT19937 seed {example.seed}, "
+            f"{int(example.mask.sum())}/{example.mask.numel()} background pixels, "
+            f"{example.n_clusters} clusters"
         )
+        for metric, score in example.scores().items():
+            print(f"{metric}: {score:.6f}")
+        if args.output_dir is not None:
+            for kind, path in save_segmentation_comparison(example, args.output_dir).items():
+                print(f"{kind}: {path}")
         if args.plot:
-            mask_image = mask.cpu().numpy().reshape(image.shape, order="F")
-            fig, axes = plt.subplots(1, 3, figsize=(9, 3))
-            axes[0].imshow(image.cpu().numpy(), cmap="gray")
-            axes[0].set_title("input")
-            axes[1].imshow(mask_image, cmap="gray")
-            axes[1].set_title("mask")
-            segments = axes[2].imshow(
-                cluster_map.cpu().numpy(), cmap="tab10", vmin=-1, vmax=9
-            )
-            axes[2].set_title("segments")
-            for axis in axes:
-                axis.axis("off")
-            fig.colorbar(segments, ax=axes.ravel().tolist(), shrink=0.6)
-            _, animation = animate_dynamics(states, tuple(image.shape))
-            plot_spectral_clustering(projection, states[~mask], phase_iter=60)
+            plot_segmentation_comparison(example)
+            _, animation = animate_dynamics(example.states, tuple(example.image.shape))
             plt.show()
     else:
         try:

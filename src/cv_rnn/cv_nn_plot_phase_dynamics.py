@@ -1,6 +1,4 @@
-# Animation API replacement for plot_dynamics and plot_dynamics_animated.
-# This module provides animate_dynamics(), the canonical animation function.
-# (plot_dynamics and plot_dynamics_animated are removed as per contract.)
+"""Animate complex pixel states with MATLAB column-major image layout."""
 
 import numpy as np
 import torch
@@ -114,16 +112,11 @@ def animate_dynamics(
         if frame_idx >= layer_1_steps:
             im.set_clim(-np.pi, np.pi)
         else:
-            # Before layer 2, auto-scale to show phase variation
-            valid_mask = ~np.isnan(phase_image)
-            if np.any(valid_mask):
-                valid_phases = phase_image[valid_mask]
-                if len(valid_phases) > 0:
-                    vmin, vmax = np.percentile(valid_phases, [5, 95])
-                    # Ensure symmetric range for better visualization
-                    vmax = max(abs(vmin), abs(vmax))
-                    vmin = -vmax
-                    im.set_clim(vmin, vmax)
+            # A symmetric range around zero hides small differences around a
+            # nonzero common phase. Scale the actual phase range, without clipping.
+            valid = phase_image[np.isfinite(phase_image)]
+            if valid.size:
+                im.set_clim(float(valid.min()), float(valid.max()))
 
         # Update title and layer label
         title.set_text(f"t={frame_idx + 1}")
