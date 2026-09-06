@@ -310,7 +310,7 @@ The cv-RNN approach offers several advantages:
 - Rich spatiotemporal dynamics for versatile applications
 - Biologically plausible computational mechanism
 
-Reported accuracy for image segmentation (Liboni et al. 2023, *SI Appendix* section III;
+Reported accuracy for image segmentation (Liboni et al. 2025, *SI Appendix* section III;
 see `docs/references/02_supplementary.md`): **93%** of pixels correctly clustered across
 1,000 nonoverlapping two-shape images, and **86%** across 1,000 nonoverlapping three-shape
 images. This is fraction of correctly clustered pixels, not Adjusted Rand Index, and the
