@@ -22,8 +22,8 @@ Unlike traditional deep learning approaches that require extensive training, the
 
 - **Image Segmentation**: Segment objects in images using traveling waves of phase synchronization
 - **XOR Computation**: Reproduce the MATLAB example using inverse-designed complex inputs, additive interference, and a shared-cluster synchrony decoder
-- **Short-Term Memory**: Store and retrieve information using chimera states
-- **Secure Communication**: Exchange encrypted messages using dynamical patterns
+- **Short-Term Memory**: Reproduce the eight-item MATLAB memory task, including sequential recall and clearing
+- **Message Transmission (Experimental)**: Encode letters and spaces as transient phase-coherent clusters; this is not secure encryption
 
 ## Installation
 
@@ -81,8 +81,8 @@ sync or MATLAB installation is needed:
 
 ```bash
 conda activate posn
-python src/cv_rnn/cv_nn_xor.py
-python src/cv_rnn/cv_nn_xor.py --plot
+python -m src.cv_rnn xor
+python -m src.cv_rnn xor --plot
 python -m pytest tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
@@ -110,6 +110,134 @@ check inverse-designed targets and additive interference, and exercise the
 actual decoder. This is not yet a MATLAB/Octave cross-runtime verification:
 equal PyTorch and MATLAB seeds do not generate equal samples. Use shared target
 and initial-state arrays for that comparison.
+
+### Memory Task
+
+`src/cv_rnn/cv_nn_memory.py` ports
+`matlab/budzinskiEAexact/cvnn_memory_task.m`: 321 nodes, coupling strength 45,
+phase lag 1.55, and natural frequency 10 Hz. It shares the double-precision
+Fourier solver in `src/cv_rnn/cv_nn.py` with XOR.
+
+```bash
+python -m src.cv_rnn memory
+python -m src.cv_rnn memory --plot
+python -m pytest tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
+```
+
+The demos use the package entry point (`python -m src.cv_rnn`), rather than
+executing individual source files. `--seed` selects a reproducible PyTorch run;
+the default is 1. No environment synchronization or MATLAB installation is needed.
+
+The reference sequence is:
+
+| Interval | State initialization and purpose |
+|----------|----------------------------------|
+| 0–1 s | Random unit-amplitude background |
+| 1–4 s | Inverse-designed input for item 2 |
+| 4–7 s | Inverse-designed input for item 6 |
+| 7–8 s | Independent random background, clearing the memory |
+
+Both targets have phase zero in the selected 40-node block, random outside
+phases, and amplitudes in `[2, 2.5)`. Items are numbered 1–8. Node 321 remains
+part of the network but is outside the eight equal-sized decoder groups.
+
+**Boundary semantics matter:** the MATLAB loops overwrite the shared sample at
+1, 4, and 7 seconds with the new segment's initial state. The Python timeline
+does the same. The exact recall states immediately before the updates at 4 and
+7 seconds are therefore returned separately, not substituted into the timeline.
+
+```python
+from src.cv_rnn import MemoryCVNN
+
+memory = MemoryCVNN()
+result = memory.run(items=(2, 6), seed=1)
+result.trajectory       # complex (321, 8001), including the final 8 s sample
+result.recall_times     # [4.0, 7.0], interpreted immediately before each update
+result.recall_states    # complex (321, 2), independent of overwritten samples
+memory.decode(result.recall_states)  # boolean (8, 2): item 2, then item 6
+```
+
+The default time step is 1 ms; alternate `dt` values must divide one second.
+The decoder thresholds each group's phase synchrony independently at 0.8;
+it does not force an item to win. This decoder and the additional synchrony
+plot follow the paper; the MATLAB script itself only plots phase dynamics.
+Tests cover independent matrix-exponential agreement, cue-boundary overwrites,
+recall and clearing, and exclusion of the unassigned node from decoding.
+MATLAB/Octave cross-runtime verification still requires shared numerical inputs.
+
+### Message Transmission Demo
+
+`src/cv_rnn/cv_nn_message.py` implements an **additive, framed research protocol**.
+It is inspired by the paper, not an exact reproduction of Figure 4: the local
+input description is ambiguous about addition versus multiplication, and the
+original alphabet in Supplementary Note 8 is not available locally.
+
+```bash
+python -m src.cv_rnn message
+python -m src.cv_rnn message --text "HELLO WORLD" --plot
+python -m src.cv_rnn message --receiver-frequency-hz 9
+python -m src.cv_rnn message --receiver-seed 99
+python -m pytest tests/test_message_cv_nn.py tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
+```
+
+Input must be nonempty uppercase `A-Z` and spaces. Leading/trailing spaces and
+repeated letters are preserved; unsupported characters are rejected, not silently
+normalized. `--seed` defaults to 1 and controls reproducible sender experiments.
+`--frequency-hz` defaults to 10; receiver overrides intentionally allow mismatched
+frequency or initial-state experiments. `--dt` sets receiver sampling, default
+0.01 seconds. All commands use the existing Conda dependencies without downloads.
+
+The public alphabet uses 27 contiguous blocks of 16 nodes (432 total), with
+coupling strength 45 and phase lag 1.55. Each character gets a three-second
+frame. Its complex target has phase zero in the selected block, random phases
+outside, and independent amplitudes in `[2, 2.5)`. The sender privately chooses
+a target delay between 35% and 50% of the frame duration.
+
+For each input at time `t`, the sender calculates
+`impulse = D(-delay) @ target - state_before_input`.
+The receiver **adds** that pulse to its own running state; it never receives a
+replacement state or target. `Ciphertext` contains only ordered `InputEvent`
+vectors/times and the final observation time. The alphabet and network
+configuration are public; frequency and initial state belong to `MessageKey`.
+
+```python
+from src.cv_rnn import MessageDemo
+
+sender = MessageDemo()
+key = sender.make_key(seed=1, frequency_hz=10.0)
+ciphertext = sender.encode("HELLO WORLD", key, seed=1)
+
+receiver = MessageDemo()  # independent of the sender
+trace = receiver.receive(ciphertext, key)
+decoded = receiver.decode_frames(trace)
+text = "".join("?" if item.symbol is None else item.symbol for item in decoded)
+```
+
+The decoder searches each half-open input frame without seeing private target
+times. It selects the strongest local-coherence peak and compares other blocks
+**at that same instant**. Default acceptance requires synchrony at least 0.9 and
+a margin of at least 0.15. Rejected frames return `symbol=None` (displayed as `?`);
+a space is a separate alphabet symbol. Exactly one result per frame avoids
+duplicate threshold-crossing detections without deleting genuine repeated letters.
+Plots show the receiver's full phase dynamics, symbol-coherence heatmap, public
+frame boundaries, and observed peaks—not sender target annotations.
+
+**Do not use this for confidentiality or authentication.** A 9 Hz receiver with
+the same initial state decodes the default 10 Hz sender's `HELLO`: common phase
+rotation aliases at the three-second input spacing. A different initial state
+is not guaranteed to hide every character either; the default `--receiver-seed 99`
+experiment currently returns `H????`. The CLI reports these outcomes rather than
+forcing wrong-key failure. Seeds here are reproducibility controls, not
+cryptographic randomness.
+
+This is an in-memory transmission simulation, not a network transport or secure
+file format. Public framing exposes message length. Each default character uses
+6912 bytes of complex pulse data, excluding timing/metadata. Coarse sampling can
+miss peaks; long transmissions and adverse parameters can amplify roundoff and
+state errors. No seed retries, normalization, or automatic corrections conceal
+failures. Tests cover independent impulse dynamics, private-delay target recovery,
+separate receivers, repeated peaks/letters, spaces versus erasures, and the
+frequency-alias counterexample.
 
 ## Key Concepts
 
@@ -139,24 +267,6 @@ where:
 - ϵ is the coupling strength
 - ϕ is the phase-lag parameter
 - A is the connectivity matrix
-
-## Repository Structure
-
-```
-├── cvrnn/
-│   ├── __init__.py
-│   ├── cvrnn.py               # Core CV-RNN implementation for segmentation
-│   ├── computational_cvrnn.py # CV-RNN for computational tasks
-│   └── visualization.py       # Visualization utilities
-├── examples/
-│   ├── segmentation_demo.py   # Image segmentation examples
-│   ├── logic_gates_demo.py    # Logic gates implementation
-│   ├── memory_demo.py         # Short-term memory demonstration
-│   └── secure_comm_demo.py    # Secure communication example
-├── data/                      # Sample datasets and images
-├── notebooks/                 # Jupyter notebooks with tutorials
-└── tests/                     # Unit tests
-```
 
 ## Comparison with Traditional Methods
 
