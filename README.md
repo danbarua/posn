@@ -97,6 +97,16 @@ production helpers; `tests/test_image_segmentation.py` is a MATLAB
 cross-runtime parity check that stays skipped until reference `.mat` exports
 are added under `datasets/`.
 
+`run_segmentation_example`'s bundled results use the demo's own hardcoded
+seeds (1 for 2shapes, 9 for 3shapes) and hit foreground ARI = 1.0 on every
+bundled image (`tests/test_segmentation_objects.py`). Generic random seeds do
+not reproduce this: a 20-seed sweep gives mean foreground ARI ≈ 0.6 (min near
+0) on the same images, and phase-normalizing eigenvectors rules out an
+eigendecomposition-convention artifact as the cause — see
+[`docs/references/04_paper_vs_matlab_drift.md`](docs/references/04_paper_vs_matlab_drift.md)
+and `scripts/probe_paper_vs_matlab_drift.py` for the full measurement and
+other preprint/published/MATLAB drift this repository found and quantified.
+
 ### XOR Computation
 
 The Python implementation follows `matlab/budzinskiEAexact/cvnn_xor_gate.m`:

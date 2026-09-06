@@ -1,4 +1,11 @@
-"""All bundled shape images must separate actual objects, not just background."""
+"""All bundled shape images must separate actual objects, not just background.
+
+This exercises the reference demo's own hardcoded seeds (1 for 2shapes, 9 for
+3shapes) and their perfect ARI is specific to those seeds, not a general
+property of generic random initial conditions: see
+docs/references/04_paper_vs_matlab_drift.md section 4 and
+scripts/probe_paper_vs_matlab_drift.py for the measured seed sensitivity.
+"""
 
 from pathlib import Path
 
