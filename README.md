@@ -21,7 +21,7 @@ Unlike traditional deep learning approaches that require extensive training, the
 ## Features
 
 - **Image Segmentation**: Segment objects in images using traveling waves of phase synchronization
-- **Logic Operations**: Implement XOR, AND, OR and other logic gates using phase dynamics
+- **XOR Computation**: Reproduce the MATLAB example using inverse-designed complex inputs, additive interference, and a shared-cluster synchrony decoder
 - **Short-Term Memory**: Store and retrieve information using chimera states
 - **Secure Communication**: Exchange encrypted messages using dynamical patterns
 
@@ -66,20 +66,50 @@ segments, dynamics = cvrnn.segment(
 visualize_segmentation(img, segments, dynamics)
 ```
 
-### Computational Tasks
+### XOR Computation
+
+The Python implementation follows `matlab/budzinskiEAexact/cvnn_xor_gate.m`:
+201 nodes, coupling strength 50, phase lag 1.56, natural frequency 10 Hz, and
+target time 3 seconds. Both inputs target MATLAB nodes 51:150 (Python slice
+`50:150`), at phases -1.5 and +1.5 with independent, nonuniform amplitudes.
+Initial states are calculated by inverse evolution; simultaneous inputs are
+added, not multiplied. One synchrony threshold decodes the result without
+applying Boolean XOR in Python.
+
+Run from the repository root in the existing Conda environment; no dependency
+sync or MATLAB installation is needed:
+
+```bash
+conda activate posn
+python src/cv_rnn/cv_nn_xor.py
+python src/cv_rnn/cv_nn_xor.py --plot
+python -m pytest tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
+```
+
+The first command prints the truth table without opening plots. `--plot`
+displays all four trajectories and their final phase snapshots.
 
 ```python
-from computational_cvrnn import ComputationalCVRNN
+from src.cv_rnn import XorCVNN
 
-# Initialize the CV-RNN
-cvrnn = ComputationalCVRNN(N=100, device="cuda" if torch.cuda.is_available() else "cpu")
-
-# Implement an XOR gate
-xor_results = cvrnn.implement_logic_gate('XOR')
-
-# Visualize the results
-xor_figs = cvrnn.visualize_logic_gate(xor_results)
+gate = XorCVNN()
+table = gate.truth_table(seed=1)  # {(0, 0): 0, (1, 0): 1, (0, 1): 1, (1, 1): 0}
+inputs = gate.xor_inputs(target_time=3.0, seed=1)
+trajectory = gate.evolve(inputs[(1, 0)], [0.0, 1.0, 2.0, 3.0])  # (nodes, times)
 ```
+
+Propagation uses double-precision FFTs equivalent to the reference's analytical
+Fourier eigensystem. `design_input(target, target_time)` supports comparisons
+using externally supplied complex targets; preserve their amplitudes.
+The default synchrony threshold is 0.8, a decoder choice rather than a value
+specified by the MATLAB plotting script. Other seeds or network sizes are not
+guaranteed to separate at that threshold.
+
+Tests compare full complex states with an independent SciPy matrix exponential,
+check inverse-designed targets and additive interference, and exercise the
+actual decoder. This is not yet a MATLAB/Octave cross-runtime verification:
+equal PyTorch and MATLAB seeds do not generate equal samples. Use shared target
+and initial-state arrays for that comparison.
 
 ## Key Concepts
 

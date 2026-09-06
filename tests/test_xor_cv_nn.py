@@ -1,160 +1,79 @@
-import torch
-import math
+"""Numerical and behavioral checks against the MATLAB XOR construction."""
 
-# Import the oscillator network (the XorCVNN class)
+import numpy as np
+import pytest
+import torch
+from scipy.linalg import expm
+
 from src.cv_rnn import XorCVNN
 
 
-def test_convergence_to_perfect_synchrony():
-    """
-    Test that if all oscillators start with the same phase (i.e. unperturbed),
-    the network remains synchronous.
-    """
-    N = 100
-    network = XorCVNN(N=N, device="cpu")
-
-    # Set an initial condition where all nodes are perfectly synchronized
-    x0 = torch.ones(
-        N, dtype=torch.complex64, device=network.device
-    )  # exp(0i) = 1 for all
-    traj = network._run_exactly(x0, nt=400, dt=1e-3)
-
-    # Extract the final state and calculate its phases
-    final_state = traj[:, -1]
-    phases = torch.angle(final_state)
-
-    # Get synchrony level (Kuramoto order parameter)
-    sync = network._sync_level(phases)
-
-    # With perfect initial synchrony, the order parameter should remain near 1
-    assert sync > 0.999, f"Expected near-perfect synchrony, got {sync:.4f}"
+def _matlab_operator(n):
+    """Independent translation of distance_dependent_graph and K in MATLAB."""
+    idx = np.arange(n)
+    distance = np.abs(idx[:, None] - idx[None, :]).astype(float)
+    distance = np.minimum(distance, n - distance)
+    np.fill_diagonal(distance, np.inf)
+    adjacency = 1 / distance
+    adjacency /= adjacency[0].sum()
+    return 50 * np.exp(-1.56j) * adjacency + 1j * 2 * np.pi * 10 * np.eye(n)
 
 
-def test_convergence_from_near_synchrony():
-    """
-    Test that if the oscillators start nearly synchronous (with only small perturbations),
-    the network converges to synchrony after sufficient time.
-    """
-    N = 100
-    network = XorCVNN(N=N, device="cpu")
+@pytest.mark.parametrize("n", [16, 201])  # even ring and MATLAB's odd-sized ring
+def test_evolution_matches_matlab_matrix_exponential(n):
+    network = XorCVNN(N=n, device="cpu")
+    rng = np.random.default_rng(2)
+    x0 = (1.5 + 2 * rng.random(n)) * np.exp(2j * np.pi * rng.random(n))
+    times = [0.0, 0.001, 0.12, 3.0]
+    operator = _matlab_operator(n)
+    expected = np.column_stack([expm(operator * t) @ x0 for t in times])
 
-    # Create a small random perturbation around 0 (i.e. around exp(0i)=1 for synchrony)
-    perturbation = 0.01 * (torch.rand(N, device=network.device) - 0.5)
-    x0 = torch.exp(1j * perturbation)
+    actual = network.evolve(torch.from_numpy(x0), times)
 
-    # Run the closed-form simulation
-    traj = network._run_exactly(x0, nt=400, dt=1e-3)
-
-    # Extract final state and compute the synchrony level
-    final_state = traj[:, -1]
-    phases = torch.angle(final_state)
-    sync = network._sync_level(phases)
-
-    # Expect high synchrony (e.g., at least 0.95)
-    assert sync > 0.95, f"Expected synchrony > 0.95, got {sync:.4f}"
+    # Compare amplitudes as well as phases. This exposes a non-unitary
+    # eigenvector inverse, missing natural frequency, or state normalization.
+    np.testing.assert_allclose(actual.numpy(), expected, rtol=2e-11, atol=2e-11)
 
 
-def test_convergence_eventually():
-    """
-    Test that if all oscillators start random phases,
-    the network eventually synchronises, somewhat.
-    """
-    N = 16
-    network = XorCVNN(N=N, device="cpu")
+def test_xor_inputs_recover_shared_targets_and_interfere():
+    network = XorCVNN(device="cpu")
+    inputs = network.xor_inputs(target_time=3.0, seed=1)
+    forward = expm(3.0 * _matlab_operator(201))
+    states = {bits: forward @ x0.numpy() for bits, x0 in inputs.items()}
+    cluster = slice(50, 150)  # MATLAB's one-based nodes 51:150
 
-    # Create a random initial phase vector
-    x0 = torch.exp(1j * 2 * math.pi * torch.rand(N, device=network.device))
+    for bits, phase in [((1, 0), -1.5), ((0, 1), 1.5)]:
+        target = states[bits]
+        np.testing.assert_allclose(np.angle(target[cluster]), phase, atol=2e-11)
+        assert np.all(np.abs(target) >= 1.5)
+        assert np.all(np.abs(target) < 3.5)
 
-    # run the network for a longer time to see the synchronisation
-    traj = network._run_exactly(x0, nt=2000, dt=1e-3)
-
-    # Extract the final state and calculate its phases
-    early_state = traj[:, 50]
-    phases = torch.angle(early_state)
-    sync = network._sync_level(phases)
-    assert sync < 0.8, f"Expected low early synchrony, got {sync:.4f}"
-
-    final_state = traj[:, -1]
-    phases = torch.angle(final_state)
-    sync = network._sync_level(phases)
-
-    # Vectorized Kuramoto order parameter for each time (along the node dimension)
-    # This gives a tensor of shape (nt,), one value per time step.
-    sync_over_time = torch.abs(torch.mean(torch.exp(1j * (torch.angle(traj))), dim=0))
-
-    # Compute the maximum synchrony over all time points
-    max_sync, max_idx = torch.max(sync_over_time, dim=0)
-    max_sync = max_sync.item()
-    max_idx = max_idx.item()
-
-    print(f"Maximum synchrony {max_sync:.3f} achieved at timestep {max_idx}.")
-    # If coupling is implemented correctly, synchrony should trend towards 1
-    # Realistically, 0.4 at best, and with small networks only
-    threshold = 0.34
-    assert max_sync > threshold, (
-        f"Expected some synchrony (>{threshold:.2f}, got {max_sync:.4f}"
+    # With both inputs present, linear superposition must produce the sum of
+    # the complex targets, not their product or two separate coherent patches.
+    np.testing.assert_allclose(
+        states[(1, 1)], states[(1, 0)] + states[(0, 1)], rtol=2e-11, atol=2e-11
     )
+    combined_synchrony = np.abs(np.mean(np.exp(1j * np.angle(states[(1, 1)][cluster]))))
+    assert combined_synchrony < 0.8
 
 
-def test_chimera_state_local_synchrony():
-    """
-    Induce a chimera state by applying the network's chimera input to a given center.
-    Then verify that at a chosen readout time, the targeted region has a significantly higher
-    local synchrony (Kuramoto order parameter) than regions outside it.
-    """
-    N = 200
-    network = XorCVNN(N=N, device="cpu")
+def test_truth_table_decodes_xor_at_the_target_time():
+    network = XorCVNN(device="cpu")
+    assert network.truth_table(seed=1) == {
+        (0, 0): 0,
+        (1, 0): 1,
+        (0, 1): 1,
+        (1, 1): 0,
+    }
 
-    # Define parameters for the chimera target region.
-    # For example, let the synchronous (chimera) cluster be centered at index center,
-    # with width (half width) 20.
-    center = N // 2
-    width = 20  # targets approximately 2*width nodes (depending on wrap-around)
 
-    # Create a random initial phase vector
-    x0 = torch.exp(1j * 2 * math.pi * torch.rand(N, device=network.device))
-
-    # Create the chimera input for the chosen center region.
-    chimera_input = network._chimera_input(center, width)
-
-    # Combine to produce a chimera-like initial state.
-    # Inside the target region, the chimera input forces phase=0 (i.e., exp(0j)==1);
-    # outside, the final phase will follow a nontrivial pattern.
-    x_init = x0 * chimera_input
-
-    # Run the exact (closed-form) simulation over a longer time to see the local evolution.
-    nt = 1000
-    dt = 1e-3
-    traj = network._run_exactly(x_init, nt=nt, dt=dt)
-
-    # Pick a readout time (say near the end) to measure the state.
-    readout_time = nt - 1
-    final_state = traj[:, readout_time]
-
-    # Create an index vector.
-    idx = torch.arange(N, device=network.device)
-
-    # Define the target synchronous region indices.
-    # Here we use the same condition as in _chimera_input: distance < width.
-    dist = torch.minimum((idx - center).abs(), (N - (idx - center).abs()))
-    mask_sync = dist < width
-    mask_async = ~mask_sync
-
-    # Compute local Kuramoto order parameters.
-    phases_sync = torch.angle(final_state[mask_sync])
-    phases_async = torch.angle(final_state[mask_async])
-
-    sync_level_sync = network._sync_level(phases_sync)
-    sync_level_async = network._sync_level(phases_async)
-
-    # For a successful chimera induction the local order parameter in the target region
-    # should be much higher than outside.
-    # Note: The exact thresholds may depend on network parameters.
-    assert sync_level_sync > 0.34, (
-        f"Expected high synchrony in target region, got {sync_level_sync:.3f}"
-    )
-    # We expect the asynchronous region to have lower synchrony.
-    assert sync_level_async < sync_level_sync - 0.2, (
-        f"Expected asynchronous region to be significantly less synchronous than the target region; "
-        f"sync_level_sync={sync_level_sync:.3f}, sync_level_async={sync_level_async:.3f}"
-    )
+def test_readout_threshold_is_applied_to_one_cluster():
+    # At zero threshold all four seeded states trigger the shared decoder.
+    # XORing two thresholded region bits would incorrectly return four zeros.
+    network = XorCVNN(device="cpu")
+    assert network.truth_table(seed=1, threshold=0.0) == {
+        (0, 0): 1,
+        (1, 0): 1,
+        (0, 1): 1,
+        (1, 1): 1,
+    }

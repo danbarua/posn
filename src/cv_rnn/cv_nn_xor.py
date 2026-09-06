@@ -1,383 +1,230 @@
+"""XOR by transient phase synchrony, ported from cvnn_xor_gate.m.
+
+Reference: matlab/budzinskiEAexact/cvnn_xor_gate.m and its circulant eigensystem.
+The dynamics are linear: x(t) = exp((i*omega*I + K)*t) x(0). Inputs are designed
+backwards from complex target states, then added when both inputs are active.
+Only the shared-cluster synchrony readout is nonlinear; there is no Boolean XOR.
+"""
+
+import cmath
 import math
-from typing import Dict, Tuple
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
-
-"""
-xor_cv_nn.py
--------------------------------------------
-A *functional* XOR gate realised with a
-complex-valued neural network
--------------------------------------------
-The approaches are conceptually similar but implemented differently.
-The MATLAB version calculates inputs that will evolve into specific target patterns,
-while the Python version directly constructs chimera patterns.
-
-The Python implementation is a faithful adaptation of the core concepts from the original MATLAB code, 
-but with several improvements:
-
-- More compact implementation: Encapsulates the entire XOR gate in a clean class structure
-- Explicit readout mechanism: Clearly defines how synchronization maps to logical outputs
-- Hardware acceleration: Leverages PyTorch for potential GPU acceleration
-- Parameterization: Makes it easier to adjust hyperparameters
-
-Both implementations demonstrate the fundamental concept from the paper: that complex-valued linear dynamics with
-phase delays can generate sophisticated spatiotemporal patterns capable of performing logical operations like XOR.
-
-The Python version is more practical for integration with modern ML frameworks while preserving the mathematical
-principles of the original implementation.
-"""
+from matplotlib.figure import Figure
 
 
 class XorCVNN:
-    """
-    Simple 1-D ring CV-NN that implements XOR by
-    measuring phase-synchrony in two independent regions.
+    """Distance-coupled ring with the MATLAB XOR parameters.
+
+    Defaults reproduce N=201, epsilon=50, phi=1.56, and f=10 Hz. The shared
+    cluster is Python slice 50:150 (MATLAB nodes 51:150); other sizes use the
+    central half of the ring. Computation uses float64/complex128, like MATLAB.
+    Amplitudes are part of the computation and must not be normalized away.
     """
 
-    def __init__(self, N: int = 200, device: str | torch.device = "cpu") -> None:
-        """
-        Initialise the Complex-Valued-Neural-Net with a ring topology and a fixed number of nodes.
-        Args:
-            N (int): number of nodes in the ring. (default: 200).
-            device (str|torch.device): device on which to run the simulation. (default: "cpu").
-        """
+    def __init__(self, N: int = 201, device: str | torch.device = "cpu") -> None:
+        if N < 4:
+            raise ValueError("N must be at least 4 for a central synchronized cluster")
         self.N = N
         self.device = torch.device(device)
+        self.cluster = slice(N // 4, 3 * N // 4)
 
-        # --- build once, reuse everywhere ---------------------------------
+        idx = torch.arange(N, dtype=torch.float64, device=self.device)
+        distance = (idx[:, None] - idx[None, :]).abs()
+        distance = torch.minimum(distance, N - distance)
+        distance.fill_diagonal_(math.inf)
+        adjacency = distance.reciprocal()  # power-law exponent alpha=1
+        adjacency /= adjacency[0].sum()
 
-        self._K = self._powerlaw_connectivity(alpha=1.0, exponent=1.0)
-        self._M = self._system_matrix(self.K)  # (N,N) complex64
+        self._K = 50.0 * cmath.exp(-1.56j) * adjacency
+        self._M = self._K.clone()
+        self._M.diagonal().add_(1j * 2 * math.pi * 10.0)
+        # MATLAB's negative-sign Fourier basis diagonalizes this circulant K.
+        self._rates = torch.fft.fft(self._K[0]) + 1j * 2 * math.pi * 10.0
 
     @property
     def K(self) -> torch.Tensor:
-        """
-        The matrix `K` contains information about the connectivity
-        pattern, the coupling strength, and the phase-delay in the interaction term.
-
-        Specifically, `K = ϵe −iϕ A`, where `ϵ` is the coupling strength and `ϕ` is a phase-delay.
-        """
+        """Complex coupling K = epsilon * exp(-i*phi) * adjacency."""
         return self._K
 
     @property
     def M(self) -> torch.Tensor:
-        """
-        The matrix `M` is the linear operator that describes the dynamics of the CV-NN.
-        """
+        """Full linear operator M = i*omega*I + K."""
         return self._M
 
-    # ------------------------------------------------------------------ #
-    # 1.  Connectivity & system matrix                                   #
-    # ------------------------------------------------------------------ #
-    def _ring_distance(self) -> torch.Tensor:
-        """
-
-        Returns:
-            tensor: (N,N) float, with self-loops. 0 for diagonal.
-        """
-        idx = torch.arange(self.N, device=self.device)
-        d = torch.minimum(
-            (idx.unsqueeze(0) - idx.unsqueeze(1)).abs(),
-            self.N - (idx.unsqueeze(0) - idx.unsqueeze(1)).abs(),
-        ).to(torch.float32)
-        d.fill_diagonal_(float("inf"))
-        return d  # (N,N) float
-
-    def _powerlaw_connectivity(self, alpha: float, exponent: float) -> torch.Tensor:
-        """
-        Row-normalised power-law kernel on a ring.
-
-        We consider the nodes in the cv-NN to be coupled in a one-dimensional ring with periodic boundary conditions
-        where the connection weight decays as a power-law with distance between the two nodes.
-
-        Args:
-            alpha (float):
-            exponent (float):
-
-        Returns:
-            tensor: (N,N) float32, row-stochastic, with self-loops. 0 for diagonal.
-        """
-        d = self._ring_distance()
-        W = alpha / d.pow(exponent)  # 1 / d^γ
-        W[torch.isinf(W)] = 0.0  # remove self-loops
-        W = W / W.sum(dim=1, keepdim=True)  # stochastic rows
-        return W.to(torch.float32)  # (N,N) float32
-
-    def _system_matrix(
-        self,
-        K: torch.Tensor,
-        omega_hz: float = 10.0,
-        epsilon: float = 50.0,
-        phi: float = math.pi / 2,
+    def evolve(
+        self, x0: torch.Tensor, times: torch.Tensor | list[float]
     ) -> torch.Tensor:
+        """Return complex states (N, len(times)) at times in seconds.
+
+        Negative times implement the inverse dynamics. FFTs apply the same
+        orthonormal Fourier basis as MATLAB's circulant_eigensystem, without
+        constructing eigenvectors or assuming a generic eigensolver is unitary.
         """
-        Linear operator `M = iω + εe^{-iφ}K
+        x0 = torch.as_tensor(x0, dtype=torch.complex128, device=self.device)
+        times = torch.as_tensor(times, dtype=torch.float64, device=self.device)
+        if x0.shape != (self.N,) or times.ndim != 1:
+            raise ValueError("Expected x0 with shape (N,) and one-dimensional times")
+        coefficients = torch.fft.ifft(x0, norm="ortho")
+        modes = coefficients[:, None] * torch.exp(self._rates[:, None] * times)
+        return torch.fft.fft(modes, dim=0, norm="ortho")
 
-        Args:
-            K (tensor): (N,N) float32,
-              The matrix `K` contains information about the connectivity pattern,
-              the coupling strength, and the phase-delay in the interaction term.
-            omega_hz (float, optional): (default: 10.0 Hz)):
-            epsilon (float, optional): Coupling Strength (default: 50.0):
-            phi (float): The phase delay parameter (default: 1/2 pi).
-
-        Returns:
-
-        """
-        ω = torch.full((self.N,), 2 * math.pi * omega_hz, device=self.device)
-        diag = 1j * ω
-        phase_shift = torch.tensor(-1j * phi, dtype=torch.complex64, device=self.device)
-        return torch.diag(diag).to(torch.complex64) + epsilon * torch.exp(
-            phase_shift
-        ) * K.to(torch.complex64)
-
-    # ------------------------------------------------------------------ #
-    # 2.  Helpers                                                        #
-    # ------------------------------------------------------------------ #
-    def _chimera_input(self, center: int, width: int) -> torch.Tensor:
-        """
-        Creates chimera inputs directly through spatial phase patterns.
-
-        Region *center ± width* is phase-zero; elsewhere phase varies linearly.
-        Returns a vector of complex phases (|x| = 1).
-
-        Original MATLAB:
-
-        Args:
-            center (int): center of the region.
-            width (int): width of the region.
-        Returns:
-            tensor (N,): (complex) phases of the input vector.
-        """
-        idx = torch.arange(self.N, device=self.device)
-        dist = torch.minimum((idx - center).abs(), self.N - (idx - center).abs())
-        same = dist < width
-        phases = torch.zeros(self.N, device=self.device)
-        phases[~same] = 2 * math.pi * idx[~same] / self.N
-        return torch.exp(1j * phases).to(torch.complex64)
-
-    @staticmethod
-    def _sync_level(phases: torch.Tensor) -> float:
-        """
-        Kuramoto order parameter |⟨e^{iθ}⟩|.
-
-        `phases` is a real-valued 1-D tensor (radians).
-
-        Args:
-            phases (tensor): (N,) phases of the input vector.
-        Returns:
-            float: Kuramoto order parameter.
-        """
-        return torch.abs(torch.mean(torch.exp(1j * phases))).item()
-
-    # ------------------------------------------------------------------ #
-    # 3.  Core simulation                                                #
-    # ------------------------------------------------------------------ #
-    def _run_iteratively(
-        self, x0: torch.Tensor, nt: int = 200, dt: float = 1e-3
+    def design_input(
+        self, target: torch.Tensor, target_time: float = 3.0
     ) -> torch.Tensor:
+        """Calculate x(0) = exp(-M*target_time) target, preserving amplitudes."""
+        return self.evolve(target, [-target_time])[:, 0]
+
+    def xor_inputs(
+        self, target_time: float = 3.0, seed: int = 1
+    ) -> dict[tuple[int, int], torch.Tensor]:
+        """Construct the four initial states in the MATLAB example.
+
+        X and Y target the same cluster at phases -1.5 and +1.5. Each target
+        has independent amplitudes in [1.5, 3.5) and random outside phases.
+        The zero-input case is a separate random unit-amplitude state, not an
+        extra baseline added to the active inputs. PyTorch and MATLAB seeds
+        do not produce identical random samples; compare with shared targets
+        and initial states when checking cross-runtime numerical parity.
         """
-        Linear recurrence  x[t+1] = M x[t].
+        generator = torch.Generator(device=self.device).manual_seed(seed)
+        inputs = []
+        for phase in (-1.5, 1.5):
+            theta = (
+                2
+                * math.pi
+                * (
+                    torch.rand(
+                        self.N,
+                        generator=generator,
+                        dtype=torch.float64,
+                        device=self.device,
+                    )
+                    - 0.5
+                )
+            )
+            theta[self.cluster] = phase
+            amplitudes = 1.5 + 2 * torch.rand(
+                self.N, generator=generator, dtype=torch.float64, device=self.device
+            )
+            target = amplitudes * torch.exp(1j * theta)
+            inputs.append(self.design_input(target, target_time))
 
-        Returns (N,nt) complex.
-
-        Original MATLAB: Uses eigendecomposition for exact simulation with closed-form solution.
-        Python: Uses iterative matrix multiplication.
-
-        The MATLAB implementation leverages the exact solution more explicitly, while the Python implementation uses an
-        iterative approach that's equivalent but more straightforward to implement.
-
-        Args:
-            x0 (tensor): (N,) initial state.
-            nt (int): number of timesteps. (default: 200)
-            dt (float): timestep. (default: 1e-3).
-
-        Returns:
-            tensor: (N,nt) complex, trajectory.
-        """
-        traj = torch.empty((self.N, nt), dtype=torch.complex64, device=self.device)
-        traj[:, 0] = x0
-        x = x0
-        for t in range(1, nt):
-            if torch.isnan(x).any():
-                print(f"NaN detected at timestep {t}")
-                break
-            x = torch.exp(self.M * dt) @ x
-            traj[:, t] = x
-            if torch.isinf(x).any():
-                print(f"Inf detected at timestep {t}")
-                break
-        return traj
-
-    def _run_exactly(
-        self, x0: torch.Tensor, nt: int = 200, dt: float = 1e-3
-    ) -> torch.Tensor:
-        """
-        Exact simulation of the CV-NN using the closed-form solution.
-
-        This function computes the trajectory x(t) = exp(M*t) x0 exactly.
-        The eigen decomposition of self.M is computed:
-
-            self.M = v diag(λ) v⁻¹,
-
-        and for each time t we evaluate:
-
-            x(t) = v diag(exp(λ * t)) v⁻¹ x0.
-
-        Since our connectivity matrix is well-behaved, and the eigenvectors are unitary,
-        we can use v.conj().T as the inverse.
-
-        Args:
-            x0 (torch.Tensor): (N,) initial state, complex64.
-            nt (int): number of timesteps.
-            dt (float): time step.
-
-        Returns:
-            torch.Tensor: (N, nt) trajectory of the system.
-        """
-        traj = torch.empty((self.N, nt), dtype=torch.complex64, device=self.device)
-        traj[:, 0] = x0
-
-        # Compute eigen decomposition of self.M:
-        eigenvalues, eigenvectors = torch.linalg.eig(self.M)
-        # In our case the eigenvectors are unitary (or nearly so) so that the
-        # inverse can be obtained by the conjugate transpose.
-        v_inv = eigenvectors.conj().T
-
-        # Compute the state at each time using the closed-form solution:
-        for t in range(1, nt):
-            time = t * dt
-            # Diagonal: exp(λ * time)
-            exp_diag = torch.exp(eigenvalues * time)
-            # Compute exp(M*time)*x0 = v @ diag(exp_diag) @ v_inv @ x0
-            traj[:, t] = eigenvectors @ (exp_diag * (v_inv @ x0))
-        return traj
-
-    # ------------------------------------------------------------------ #
-    # 4.  XOR gate                                                       #
-    # ------------------------------------------------------------------ #
-    def truth_table(
-        self,
-        nt: int = 200,
-        dt: float = 1e-3,
-        readout_time: int = 150,
-        width: int | None = None,
-        threshold: float = 0.8,
-        seed: int = 1,
-    ) -> Dict[Tuple[int, int], int]:
-        """
-        Simulate all four input combinations and return a dictionary
-        `{(X,Y): XOR(X,Y)}` where the output is determined *solely* by
-        synchrony in the two stimulus regions.
-
-        Args:
-            nt (int): number of timesteps. (default: 200).
-            dt (float): timestep. (default: 1e-3).
-            readout_time (int): time at which to measure synchrony. (default: 150).
-            width (int): width of the two stimulus regions. (default: N/10).
-            threshold (float): synchrony threshold. (default: 0.8).
-            seed (int): random seed. (default: 1).
-        """
-        if width is None:
-            width = self.N // 10
-
-        center1 = self.N // 3
-        center2 = 2 * self.N // 3
-
-        # --- deterministic initial phases ------------------------------
-        g = torch.Generator(device=self.device).manual_seed(seed)
-        x0 = torch.exp(
-            1j * 2 * math.pi * torch.rand(self.N, generator=g, device=self.device)
+        theta0 = (
+            2
+            * math.pi
+            * (
+                torch.rand(
+                    self.N, generator=generator, dtype=torch.float64, device=self.device
+                )
+                - 0.5
+            )
         )
-
-        inp1 = self._chimera_input(center1, width)
-        inp2 = self._chimera_input(center2, width)
-
-        # enumerate input combinations
-        combos = {
-            (0, 0): x0,
-            (1, 0): x0 * inp1,
-            (0, 1): x0 * inp2,
-            (1, 1): x0 * inp1 * inp2,
+        x, y = inputs
+        return {
+            (0, 0): torch.exp(1j * theta0),
+            (1, 0): x,
+            (0, 1): y,
+            (1, 1): x + y,
         }
 
-        out: Dict[Tuple[int, int], int] = {}
-        for key, state in combos.items():
-            traj = self._run_exactly(state, nt, dt)
-            x_t = traj[:, readout_time]
+    def synchrony(self, state: torch.Tensor) -> float:
+        """Kuramoto order parameter of the shared central cluster."""
+        phases = torch.angle(state[self.cluster])
+        return torch.exp(1j * phases).mean().abs().item()
 
-            # synchrony in each stimulus region
-            idx = torch.arange(self.N, device=self.device)
-            dist1 = torch.minimum((idx - center1).abs(), self.N - (idx - center1).abs())
-            dist2 = torch.minimum((idx - center2).abs(), self.N - (idx - center2).abs())
-            mask1 = dist1 < width
-            mask2 = dist2 < width
+    def truth_table(
+        self,
+        target_time: float = 3.0,
+        threshold: float = 0.8,
+        seed: int = 1,
+        *,
+        plot: bool = False,
+        dt: float = 1e-3,
+    ) -> dict[tuple[int, int], int]:
+        """Decode each input from one cluster at the designed target time.
 
-            s1 = self._sync_level(torch.angle(x_t[mask1]))
-            s2 = self._sync_level(torch.angle(x_t[mask2]))
+        The MATLAB script supplies trajectories; threshold=0.8 implements
+        the paper's synchrony decoder, not a threshold specified by the script.
+        Random realizations and non-reference sizes need not all separate at
+        this threshold. No seeds are retried and no outputs are forced.
 
-            bit1 = int(s1 > threshold)
-            bit2 = int(s2 > threshold)
-            print(f"XOR({key}): {bit1} XOR {bit2}")
-            out[key] = bit1 ^ bit2  # XOR in Python
+        With plot=True, dt sets the plot sampling interval in seconds; the
+        exact target time is always included. Otherwise only that time is
+        evaluated, avoiding allocation of four full trajectories.
+        """
+        if not math.isfinite(target_time) or target_time <= 0:
+            raise ValueError("target_time must be positive and finite")
+        if not math.isfinite(dt) or dt <= 0:
+            raise ValueError("dt must be positive and finite")
+        times = torch.tensor([target_time], dtype=torch.float64, device=self.device)
+        if plot:
+            times = torch.cat(
+                (
+                    torch.arange(
+                        0, target_time, dt, dtype=torch.float64, device=self.device
+                    ),
+                    times,
+                )
+            )
 
-            self.plot_thickens(str(key), traj, readout_time)
-        return out
+        result = {}
+        for bits, x0 in self.xor_inputs(target_time, seed).items():
+            trajectory = self.evolve(x0, times)
+            result[bits] = int(self.synchrony(trajectory[:, -1]) > threshold)
+            if plot:
+                self.plot_trajectory(str(bits), trajectory, times)
+        if plot:
+            plt.show()
+        return result
 
-    def plot_thickens(
-        self, title: str, x: torch.Tensor, readout_time: int = -1
-    ) -> None:
-        # Determine the number of timesteps from the tensor shape
-        nt = x.shape[1]
-        # Create a time vector from 0 to nt steps
-        t = np.linspace(0, nt)
+    def plot_trajectory(
+        self, title: str, trajectory: torch.Tensor, times: torch.Tensor
+    ) -> tuple[Figure, Figure]:
+        """Plot nodes versus time in seconds and the final phase snapshot.
 
-        # ---- Figure 1: Spatiotemporal phase cv-NN ----
-        plt.figure(figsize=(7.83, 1.92))
-        plt.title(f"Spatiotemporal phase ({title})", fontsize=16, fontname="Arial")
-        # Plot phase dynamics: note np.angle(x).T gives a (nt x N) array for imshow
-        img = plt.imshow(
-            np.angle(x).T,
+        Returns figures without showing them; the caller controls display.
+        """
+        phases = torch.angle(trajectory).detach().cpu().numpy()
+        seconds = times.detach().cpu().numpy()
+        phase_figure, phase_axes = plt.subplots(figsize=(8, 3), layout="constrained")
+        image = phase_axes.imshow(
+            phases,
             aspect="auto",
-            origin="lower",
-            extent=[t[0], t[-1], 1, self.N],
+            origin="upper",
+            extent=(seconds[0], seconds[-1], self.N + 0.5, 0.5),
+            interpolation="nearest",
             cmap="bone",
+            vmin=-math.pi,
+            vmax=math.pi,
         )
-        plt.xlabel("time (steps)", fontsize=16, fontname="Arial")
-        plt.ylabel("nodes", fontsize=16, fontname="Arial")
-        plt.colorbar(img, label="phase (rad)")
-        plt.tick_params(labelsize=14, width=2)
-        plt.tight_layout()
+        phase_axes.set(
+            title=f"Phase dynamics {title}", xlabel="time (s)", ylabel="nodes"
+        )
+        phase_figure.colorbar(image, ax=phase_axes, label="phase (rad)")
 
-        # ---- Figure 2: Final state cv-NN ----
-        plt.figure(figsize=(4.05, 1.84))
-        plt.title(f"State {title} at ({readout_time})", fontsize=16, fontname="Arial")
-        # Extract final state across all nodes (column axis)
-        final_phase = np.angle(x[:, readout_time])
-        nodes = np.arange(1, self.N + 1)  # nodes from 1 to N
-        plt.scatter(
-            nodes, final_phase, c="black", marker="o", s=40
-        )  # 'filled' circle marker
-        plt.xlabel("nodes", fontsize=16, fontname="Arial")
-        plt.ylabel("phase (rad)", fontsize=16, fontname="Arial")
-        plt.xlim(0, self.N + 1)
-        plt.ylim(-4, 4)
-        plt.tick_params(labelsize=14, width=2)
-        plt.tight_layout()
-
-        plt.show()
+        state_figure, state_axes = plt.subplots(figsize=(6, 3), layout="constrained")
+        state_axes.scatter(range(1, self.N + 1), phases[:, -1], c="black", s=10)
+        state_axes.set(
+            title=f"State {title} at {seconds[-1]:g} s",
+            xlabel="nodes",
+            ylabel="phase (rad)",
+            xlim=(0, self.N + 1),
+            ylim=(-math.pi, math.pi),
+        )
+        return phase_figure, state_figure
 
 
-# --------------------------------------------------------------------------- #
-# Quick demo                                                                  #
-# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    gate = XorCVNN(N=201, device="cpu")
-    table = gate.truth_table(nt=400, dt=1e-3, readout_time=120, threshold=0.2)
-    print("-------------")
-    print("XOR truth table (synchrony-based read-out)\n X  Y |  f(X,Y)")
-    for (x, y), z in sorted(table.items()):
-        print(f" {x}  {y} |   {z}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="MATLAB-reference cv-NN XOR demo")
+    parser.add_argument(
+        "--plot", action="store_true", help="show all four trajectories"
+    )
+    args = parser.parse_args()
+    table = XorCVNN().truth_table(plot=args.plot)
+    print("XOR truth table (shared-cluster synchrony at 3 s)\n X  Y | f(X,Y)")
+    for (x, y), output in sorted(table.items()):
+        print(f" {x}  {y} |   {output}")

@@ -4,8 +4,8 @@ test_cv_rnn.py
 Intended as a CI-server smoke test to verify the outputs of the Python port
 against the MATLAB reference implementation.
 
-TODO: Run the MATLAB reference implementation and save outputs in ./references folder
-
+TODO: Run the MATLAB reference implementation and save outputs in ./datasets folder
+Filenames expected: "2shapes_ref.mat", "3shapes_ref.mat", "natural_ref.mat"
 """
 
 import math
