@@ -7,11 +7,10 @@ Eigenvector phase is canonicalized identically on both sides (see
 spatiotemporal_segmentation_torch and the exporter), so the real projection
 is a legitimate cross-runtime target independent of LAPACK backend.
 
-Octave's kmeans vs sklearn.KMeans initialization is not a parity target:
-on the 3shapes projection they produce ARI ~0.40 despite agreeing on the
-array to 4e-12. The test therefore compares Python's partition against
-sklearn run on Octave's exported projection, not against Octave's own
-kmeans labels.
+The sklearn-on-both-projections ARI==1.0 assert is same-algorithm consistency
+on arrays that already agree to ~4e-12, not clustering-parity with Octave's
+kmeans. The 3shapes fixture under Octave's exported x0 is poorly separable
+(Python vs ground truth ARI 0.496); do not read it as a quality result.
 """
 
 from pathlib import Path

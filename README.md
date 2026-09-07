@@ -121,21 +121,26 @@ embedded for provenance. Tests share arrays, not seeds.
 All three references match Python trajectories and correlations at
 `rtol=1e-10, atol=1e-12`, with exact masks. After identical eigenvector-phase
 canonicalization, the real projections agree (`rtol=1e-9, atol=1e-11`).
-sklearn `KMeans` on both projections then yields the same partition (ARI=1.0).
-Octave's own `kmeans` labels are a documented non-target: on `3shapes` they
-disagree with sklearn on the same array (ARI ~0.40) despite a 4e-12
-projection match. No ARI threshold was relaxed, and upstream MATLAB files
-were not changed. This verifies GNU Octave 6.4 execution of the MATLAB
-source, not proprietary MATLAB.
+sklearn `KMeans(n_init=1, random_state=0)` on both projections then yields
+the same partition (ARI=1.0). That last check is same-algorithm consistency
+on arrays that already agree to ~4e-12, not clustering-parity with Octave's
+`kmeans`. The `3shapes` fixture is a poorly separable case under Octave's
+exported `x0`: Python vs ground truth ARI 0.496, Octave `kmeans` vs ground
+truth 0.077, and the two clusterers disagree with each other (ARI ~0.40).
+Do not read that fixture as a segmentation-quality result. Demo seed 9 on
+the bundled Python path still scores ARI 1.0 — a different initial state.
+This verifies GNU Octave 6.4 execution of the MATLAB source, not proprietary
+MATLAB.
 
 `run_segmentation_example`'s bundled results use the demo's own hardcoded
 seeds (1 for 2shapes, 9 for 3shapes) and hit foreground ARI = 1.0 on every
 bundled shape image (`tests/test_segmentation_objects.py`). Generic random seeds do
 not reproduce this: a 20-seed sweep gives mean foreground ARI ≈ 0.6 (min near
-0) on the same images. Phase-normalizing eigenvectors does not eliminate
-seed sensitivity — that is a clustering-quality property of these images
-under random initializations, distinct from the backend-independent
-canonicalization used for cross-runtime partition parity. See
+0) on the same images. Bypassing production's eigenvector canonicalization
+does not close that gap — seed sensitivity is a clustering-quality property
+of these images under random initializations, distinct from the
+backend-independent canonicalization used for cross-runtime *projection*
+parity. See
 [`docs/references/04_paper_vs_matlab_drift.md`](docs/references/04_paper_vs_matlab_drift.md)
 and `scripts/probe_paper_vs_matlab_drift.py` for the full measurement and
 other preprint/published/MATLAB drift this repository found and quantified.

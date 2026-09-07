@@ -22,10 +22,10 @@ conclusion). None of Fig. 6B's continuous 0->pi/2 gradients can appear from
 this dataset regardless of solver or display gauge.
 
 `--synthetic` instead builds a **synthetic, clearly-labeled** per-object
-frequency gradient (not bundled data): each foreground object gets a linear
-ramp along its own principal axis (from the bundled ground-truth `labels`),
-giving a genuinely non-uniform, non-real-eigenvector B whose leading modes
-show within-object traveling-wave phase gradients comparable to Fig. 6B.
+row-wise frequency ramp (not bundled data), giving a genuinely non-uniform,
+non-real-eigenvector B whose leading modes show within-object traveling-wave
+phase gradients comparable to Fig. 6B. Layer-1 background mask counts match
+the bundled images (832 / 832).
 
 Eigenvector display phases are anchored to each mode's largest component;
 amplitudes below 1e-8 of a mode's maximum are left blank.

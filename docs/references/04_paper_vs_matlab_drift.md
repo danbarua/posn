@@ -138,14 +138,16 @@ Octave's `kmeans` labels was 0.9721244344 before canonicalization. Leading
 eigenvalues are well-separated (λ = [263.32, 0.674, 0.00523, …]). Both
 sides now canonicalize each eigenvector (largest-magnitude entry rotated to
 real-positive) before `real(rho) @ real(V)`. Projections then agree to
-~4e-12. sklearn `KMeans` on both projections yields ARI 1.0. Octave's own
-`kmeans` labels remain a non-target: on canonicalized `3shapes` they
-disagree with sklearn on the same array (ARI ~0.40). Under Octave's
-exported `x0`, neither clustering hits ground truth (`3shapes.mat`
-`labels[:,:,0]`): Python/sklearn foreground ARI 0.496, Octave `kmeans`
-0.077. The demo seed 9 still scores ARI 1.0 — that is a different initial
-state, not this fixture. Canonicalization does not resolve genuinely
-degenerate eigenspaces; the bundled/reference cases have none.
+~4e-12. sklearn `KMeans(n_init=1, random_state=0)` on both projections
+yields ARI 1.0: a same-algorithm consistency check, not clustering-parity
+with Octave's `kmeans`. The canonicalized `3shapes` fixture under Octave's
+exported `x0` is poorly separable — every clusterer finds a different basin
+(Python vs ground truth ARI 0.496, Octave `kmeans` vs ground truth 0.077,
+the two vs each other ~0.40, `n_init=10` lands elsewhere again). Do not
+read that fixture as a segmentation-quality result. Demo seed 9 still
+scores ARI 1.0 on the bundled Python path; that is a different initial
+state. Canonicalization does not resolve genuinely degenerate eigenspaces;
+the bundled/reference cases have none.
 
 This does not contradict the paper's headline claim ("93%/86% of pixels
 correctly clustered" over 1,000 images, `01_paper.md`): that is **pixel**
