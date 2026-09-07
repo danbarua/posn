@@ -10,5 +10,6 @@ dependencies = [
     "scikit-learn~=1.6.1",
     "matplotlib~=3.10.1",
     "torchvision~=0.17.2",
-    "torch~=2.2.2"
+    "torch~=2.2.2",
+    "scipy-stubs~=1.15.3",
 ]
