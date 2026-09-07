@@ -182,7 +182,7 @@ def save_segmentation_comparison(
     }.items()}
     figure = plot_segmentation_comparison(example)
     try:
-        figure.savefig(paths["figure"], dpi=140)
+        figure.savefig(paths["figure"], dpi=140, bbox_inches="tight")
     finally:
         plt.close(figure)
     figure, animation = animate_dynamics(example.states, tuple(example.image.shape))
