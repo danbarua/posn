@@ -16,6 +16,27 @@ from .segmentation_demo import (
 
 
 def main() -> None:
+    """Entry point for ``python -m src.cv_rnn <task> [flags]``.
+
+    Four mutually exclusive subcommands (``args.task``):
+
+    - ``xor``: ``[--seed INT=1] [--plot]``
+    - ``memory``: ``[--seed INT=1] [--plot]``
+    - ``message``: ``[--seed INT=1] [--plot] [--text STR="HELLO"]
+      [--frequency-hz FLOAT=10.0] [--receiver-frequency-hz FLOAT]
+      [--receiver-seed INT] [--dt FLOAT=0.01]``
+    - ``segmentation``: ``[--seed INT] [--plot]
+      [--dataset {2shapes,3shapes,natural}=2shapes] [--image-index INT=0]
+      [--n-clusters INT] [--output-dir PATH]`` — ``--seed`` defaults to
+      ``None`` here (not ``1``), meaning "use the demo's own per-dataset
+      seed" rather than a shared default across datasets.
+
+    ``--seed`` and ``--plot`` are added to every subparser in the loop
+    above and so are common to all four; the rest are subcommand-specific.
+    Dispatch below is ``if/elif`` on ``args.task`` for the first three,
+    falling through to an unconditional ``else`` for ``message`` — relies
+    on argparse's ``choices`` already having rejected anything else.
+    """
     parser = argparse.ArgumentParser(description="Computational cv-NN research demos")
     tasks = parser.add_subparsers(dest="task", required=True)
     task_parsers = {
