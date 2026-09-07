@@ -107,6 +107,15 @@ eigendecomposition-convention artifact as the cause — see
 and `scripts/probe_paper_vs_matlab_drift.py` for the full measurement and
 other preprint/published/MATLAB drift this repository found and quantified.
 
+`natural_image.mat`'s `lb` key is also real, ARI-comparable ground truth: a
+16-region semantic map (sky/ground/bear/etc, region IDs arbitrary — same
+permutation-invariance `2shapes`/`3shapes` already rely on) with no `0`
+background sentinel, unlike `labels`. `SegmentationExample.scores()`
+reports a single whole-image `ari` for `natural` instead of
+`foreground_ari`/`foreground_mask_iou`/`background_pixel_accuracy`,
+since there is no principled foreground/background split to compute those
+against.
+
 ### XOR Computation
 
 The Python implementation follows `matlab/budzinskiEAexact/cvnn_xor_gate.m`:
@@ -332,8 +341,9 @@ see `docs/references/02_supplementary.md`): **93%** of pixels correctly clustere
 images. This is fraction of correctly clustered pixels, not Adjusted Rand Index, and the
 paper reports no comparison against K-means, watershed, or U-Net baselines on this task;
 an earlier version of this table fabricated such a comparison and has been removed. This
-repository's own `foreground_ari`/`background_pixel_accuracy` (see Image Segmentation above)
-are per-image metrics on the three bundled examples, not a reproduction of the paper's
+repository's own `foreground_ari`/`background_pixel_accuracy` (2shapes/3shapes)
+and whole-image `ari` (natural; see Image Segmentation above) are per-image
+metrics on the three bundled examples, not a reproduction of the paper's
 1,000-image benchmark, which is not bundled here.
 
 ## Citations

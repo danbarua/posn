@@ -34,18 +34,25 @@ class SegmentationExample:
     mask: torch.Tensor
     labels: torch.Tensor
     projection: torch.Tensor
-    ground_truth: np.ndarray | None
+    ground_truth: np.ndarray
 
     def scores(self) -> dict[str, float]:
-        """Score shape labels without letting the large background hide errors.
+        """Score predicted labels against ground truth.
 
-        Natural-image ``lb`` contains multiple scene/edge IDs without a binary
-        background convention; do not misreport it as a two-object annotation.
+        2shapes/3shapes ``labels`` use ``0`` as an explicit background
+        sentinel; scoring there excludes it so the large background region
+        can't hide object-boundary errors. Natural-image ``lb`` is a real,
+        ARI-comparable ground-truth region map -- arbitrary IDs are fine,
+        `adjusted_rand_score` is permutation-invariant -- but it has no such
+        sentinel (every pixel, including the dominant sky/ground region,
+        already carries a nonzero ID), so there is no principled "foreground"
+        subset or background to check accuracy against: score it as a single
+        whole-image ARI instead.
         """
-        if self.ground_truth is None:
-            return {}
         predicted = self.labels.numpy()
         truth = self.ground_truth
+        if 0 not in truth:
+            return {"ari": float(adjusted_rand_score(truth.flatten(), predicted.flatten()))}
         foreground = truth != 0
         predicted_foreground = predicted != -1
         return {
@@ -102,7 +109,13 @@ def run_segmentation_example(
         states, image, mask, nt_mask=60, n_clusters=n_clusters
     )
     # Ground truth is read only AFTER inference, solely for evaluation/display.
-    truth = None if dataset == "natural" else data["labels"][:, :, image_index]
+    # natural_image.mat's "lb" is a real, ARI-comparable ground-truth region
+    # map (sky/ground/bear/etc; region 14 traces the bear silhouette exactly).
+    # Its IDs (4-19) are arbitrary, same as 2shapes/3shapes' `labels` -- fine
+    # for ARI, which is permutation-invariant. Unlike `labels`, it has no
+    # `0` background sentinel; `scores()` branches on that to avoid
+    # misreporting a whole-image comparison as a foreground/background one.
+    truth = data["lb"] if dataset == "natural" else data["labels"][:, :, image_index]
     return SegmentationExample(
         dataset, image_index, seed, n_clusters, image, states, mask, labels, projection, truth
     )
@@ -153,12 +166,17 @@ def plot_segmentation_comparison(example: SegmentationExample) -> Figure:
     axis.set_title("Predicted object labels")
     axis.set_axis_off()
     axis = figure.add_subplot(grid[2, 4])
-    if example.ground_truth is not None:
-        axis.imshow(example.ground_truth - 1.0, cmap=cmap, norm=norm, interpolation="nearest")
-        axis.set_title("Ground truth · IDs arbitrary")
+    truth = example.ground_truth
+    if 0 in truth:
+        axis.imshow(truth - 1.0, cmap=cmap, norm=norm, interpolation="nearest")
     else:
-        axis.text(0.5, 0.5, "Natural image: qualitative comparison\nNo binary object ground truth assumed",
-                  ha="center", va="center", wrap=True, transform=axis.transAxes, fontsize=9)
+        # No background sentinel (natural-image ``lb``): categories don't fit
+        # the small n_clusters-sized palette above, so remap arbitrary IDs to
+        # dense indices into their own palette (order carries no meaning).
+        truth_ids = np.unique(truth)
+        truth_cmap = ListedColormap([plt.get_cmap("tab20")(i % 20) for i in range(len(truth_ids))])
+        axis.imshow(np.searchsorted(truth_ids, truth), cmap=truth_cmap, interpolation="nearest")
+    axis.set_title("Ground truth · IDs arbitrary")
     axis.set_axis_off()
     scores = example.scores()
     score_text = " · ".join(f"{name}={value:.3f}" for name, value in scores.items())

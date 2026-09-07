@@ -192,3 +192,47 @@ this figure prepared before the v1 submission but did not include it in the
 v1 preprint text; it surfaced only in the published version. Kept locally as
 [`00_figures/arxiv.2311.16943v1.unreferenced-fig7-draft.png`](00_figures/arxiv.2311.16943v1.unreferenced-fig7-draft.png)
 for reference.
+
+## 7. `gaussian_sheet.m`'s node ordering silently assumes a square image
+
+`gaussian_sheet_torch` (`src/cv_rnn/cv_rnn_segmentation.py`) is a faithful,
+node-for-node port of `matlab/liboniEA2025image/graphs/gaussian_sheet.m`: its
+`meshgrid(rows, cols, indexing="ij")` + row-major flatten reproduces MATLAB's
+`[ROW,COL] = meshgrid(row,col); pos = [ROW(:) COL(:)]` exactly, including
+MATLAB's `meshgrid(x,y)` axis-order swap (output size `(length(y),
+length(x))`, not `(length(x), length(y))`). This is confirmed by
+`tests/test_segmentation_math.py::test_rectangular_gaussian_matches_matlab_positions`.
+
+Separately, `run_2layer_torch` builds the frequency vector as
+`omega = im.T.reshape(-1)` — MATLAB `im(:)` column-major indexing (pixel
+`(row, col)` at index `k = col*nrow + row`).
+
+**These two node-index conventions only coincide when `nrow == ncol`.**
+`gaussian_sheet.m`'s `meshgrid(row,col)` axis swap means node `k`'s
+*position* is drawn from `(row[k // ncol], col[k % ncol])` — indexed by
+`ncol`, not `nrow`. For a square image this is invisible: coordinate-swapping
+every node's `(x, y)` position uniformly preserves all pairwise Euclidean
+distances (a diagonal reflection), so the resulting weight matrix is
+identical regardless. For a **non-square** image it is not a reflection —
+`ncol != nrow` means indexing by the wrong dimension picks genuinely
+different points. Concretely, for a 3-row × 5-col grid, pixels `(row=2,
+col=1)` and `(row=0, col=2)` are diagonally far apart under `im(:)`
+indexing (normalized Euclidean distance 0.696, expected coupling ≈0.068 at
+`sigma=0.3`) but `gaussian_sheet_torch` assigns them coupling **0.80** — as
+if they were adjacent. Full weight matrix vs. the physically-correct
+distance-based matrix: max abs diff 0.73, mean abs diff 0.21 (out of an
+amplitude-1 kernel).
+
+**This is an upstream MATLAB quirk** (`gaussian_sheet.m`'s own `pos` array
+has the same property relative to `im(:)`), not something introduced by the
+Python port — `cv_rnn_segmentation.py`'s docstring already notes the port
+"preserves the upstream rectangular-grid convention as well as its square
+examples." **It does not affect this repository today**: all three bundled
+images are square (`2shapes`/`3shapes`: 32×32, `natural`: 64×64). It would
+matter if a non-square image were ever added — the connectivity would not
+represent genuine spatial locality, corrupting the Gaussian sheet's
+"nearby pixels are strongly coupled" property. Do **not** silently fix the
+`gaussian_sheet_torch`/`omega` indexing mismatch to be square-agnostic; that
+would diverge from MATLAB parity for a code path nothing currently exercises.
+If a non-square dataset is ever bundled, this needs a real decision (match
+MATLAB's quirk exactly, or diverge and document it), not a silent choice.
