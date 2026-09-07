@@ -54,8 +54,9 @@ callers/CLI decide whether to display it.
 ## Key Directories
 
 - `src/cv_rnn/`: both model families above, plus plotting.
-- `src/utils.py`: `simple_nanvar` — NaN-aware variance shared by the
-  segmentation path; `n=0` → NaN, `n=1` → `0.0` regardless of `unbiased`.
+- `src/utils.py`: `simple_nanvar` — NaN-aware variance (`n=0` → NaN, `n=1`
+  → `0.0` regardless of `unbiased`); unused by `src/cv_rnn` (grep finds no
+  importers), a legacy standalone helper rather than a shared dependency.
 - `tests/`: 9 files. Ring-network demos check against a hand-written
   `scipy.linalg.expm` reference at `rtol/atol≈2e-11`; segmentation math is
   checked against independent NumPy/SciPy re-derivations, not production
