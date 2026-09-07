@@ -7,12 +7,13 @@ This documents concrete places where the text of
 disagree, plus how much each disagreement actually changes segmentation
 outcomes. All numbers below come from
 [`scripts/probe_paper_vs_matlab_drift.py`](../../scripts/probe_paper_vs_matlab_drift.py);
-re-run it after touching the amplitude/initial-condition/window code paths or
-after updating the MATLAB submodule pin, and update the numbers here.
+re-run it after changing numerical conventions or the MATLAB submodule pin.
+The tables below were regenerated with uv and upper-triangle eigensolves.
+The separate cross-runtime result in section 4 comes from the Octave fixtures
+consumed by `tests/test_image_segmentation.py`.
 
-`src/cv_rnn` intentionally follows the MATLAB convention throughout (see
-README.md and `01_paper.md`'s provenance note) — nothing here is a proposal to
-change production defaults.
+`src/cv_rnn` follows the upstream recurrence and real-projection formula.
+Matching that formula alone does not guarantee matching eigensolver phases.
 
 ## 1. Amplitude convention: Uniform(0,1) (paper) vs. unit (MATLAB code)
 
@@ -30,17 +31,16 @@ ARI):
 
 | Image | unit-amplitude ARI (mean, min) | Uniform(0,1) ARI (mean, min) | paired diff (mean ± std) |
 | --- | --- | --- | --- |
-| 2shapes/0 | 0.661, −0.005 | 0.670, −0.001 | +0.009 ± 0.491 |
-| 2shapes/1 | 0.594, −0.012 | 0.686, −0.029 | +0.092 ± 0.387 |
-| 3shapes/0 | 0.555, 0.014 | 0.600, 0.168 | +0.046 ± 0.419 |
-| 3shapes/1 | 0.592, 0.242 | 0.591, 0.026 | −0.001 ± 0.242 |
+| 2shapes/0 | 0.589, −0.005 | 0.621, −0.009 | +0.031 ± 0.516 |
+| 2shapes/1 | 0.622, −0.022 | 0.714, −0.029 | +0.092 ± 0.366 |
+| 3shapes/0 | 0.507, 0.014 | 0.522, 0.144 | +0.016 ± 0.360 |
+| 3shapes/1 | 0.636, 0.237 | 0.596, 0.055 | −0.040 ± 0.169 |
 
-**Verdict: not significant.** The paired-difference mean is small relative to
-its standard deviation in every case (no image shows a consistent sign), and
-the background mask — which only depends on layer-1 phase, not amplitude —
-is identical between conventions in all 80 trials (mask agreement 1.0000).
-Per-seed foreground-clustering noise dwarfs any effect of this convention
-choice.
+The paired mean differences are small relative to their standard deviations
+and not consistently signed. This sweep does not establish statistical
+significance. Background masks agree in all 80 paired trials; that is an
+observed result, not a general claim that initial amplitudes cannot affect
+the phase dynamics.
 
 ## 2. Layer-2 initial condition: fresh draw (published paper) vs. reuse (MATLAB code)
 
@@ -63,18 +63,14 @@ before either layer-2 initial condition is applied):
 
 | Image | reuse ARI (mean, min) | fresh-draw ARI (mean, min) | paired diff (mean ± std) |
 | --- | --- | --- | --- |
-| 2shapes/0 | 0.537, −0.041 | 0.754, 0.008 | +0.217 ± 0.671 |
-| 2shapes/1 | 0.668, 0.011 | 0.678, −0.022 | +0.010 ± 0.602 |
-| 3shapes/0 | 0.671, 0.044 | 0.608, 0.026 | −0.063 ± 0.367 |
-| 3shapes/1 | 0.461, −0.035 | 0.537, 0.163 | +0.077 ± 0.251 |
+| 2shapes/0 | 0.606, 0.044 | 0.750, 0.033 | +0.143 ± 0.634 |
+| 2shapes/1 | 0.622, −0.029 | 0.674, −0.019 | +0.052 ± 0.667 |
+| 3shapes/0 | 0.646, 0.066 | 0.618, 0.038 | −0.028 ± 0.388 |
+| 3shapes/1 | 0.495, −0.035 | 0.621, 0.243 | +0.126 ± 0.355 |
 
-**Verdict: not significant, and not consistently signed.** One image
-(2shapes/0) shows a large positive mean difference, but with a standard
-deviation triple its size and three of four images show a much smaller or
-negative mean difference. This looks like seed noise, not a systematic effect
-of the reuse-vs-fresh choice — a larger sweep would be needed to state this
-with real statistical confidence, but there is no visible directional effect
-worth chasing further here.
+The paired differences are not consistently signed and their standard
+deviations exceed their means. A larger sweep would be needed to establish
+a systematic effect of reusing versus redrawing the initial state.
 
 ## 3. Time windows: SI Appendix table vs. the actual driver script
 
@@ -105,24 +101,16 @@ via `window_step` large enough to force exactly one):
 | --- | --- | --- | --- |
 | 2shapes/0, seed 1 | 1.000 | 1.000 | 1.000 |
 | 2shapes/0, seed 2 | 1.000 | 1.000 | 1.000 |
-| 2shapes/0, seed 3 | 1.000 | 1.000 | 0.428 |
-| 3shapes/0, seed 1 | 0.524 | 0.528 | 0.240 |
-| 3shapes/0, seed 2 | 0.479 | 0.479 | 0.296 |
-| 3shapes/0, seed 3 | 0.449 | 0.449 | 0.355 |
+| 2shapes/0, seed 3 | 1.000 | 1.000 | 0.212 |
+| 3shapes/0, seed 1 | 0.490 | 0.490 | 0.338 |
+| 3shapes/0, seed 2 | 1.000 | 1.000 | 0.295 |
+| 3shapes/0, seed 3 | 0.487 | 0.507 | 0.449 |
 
-**Verdict on the off-by-one (production vs. SI-literal): not significant** —
-identical or near-identical ARI in every row; shifting the window by one
-sample doesn't change which cluster a node falls into here.
+The one-sample shift produces identical or nearly identical ARI here. The
+short window degrades four of six rows and leaves two unchanged; it is not
+interchangeable with the longer window. These are bundled images, not a
+reconstruction of the papers' Fig. 5/6 experiments.
 
-**Verdict on the short window (Figs. 5/6 style): significant, and worse.**
-The 21-sample window measurably degrades clustering quality relative to
-either 41-sample window in 4 of 6 rows (as low as 0.240 vs. 0.524, and one
-catastrophic case, 1.000 → 0.428). A shorter analysis window gives a noisier
-similarity-matrix estimate; this is consistent with expectations. Since no
-code for Figs. 5/6 exists locally, this can only be checked on the bundled
-2shapes/3shapes images, not the actual overlapping-object images the short
-window was reportedly used for — but it is enough to say the short window is
-not a free substitution for the long one on data we can check.
 
 ## 4. Seed sensitivity (the actual headline finding)
 
@@ -132,23 +120,32 @@ The specific seeds hardcoded in `cvrnn_image_segmentation.m` — 1 for 2shapes,
 exact demo defaults). **Generic random seeds do not reproduce this.** Across
 20 random seeds per image:
 
-| Image | demo seed → ARI | generic random seeds ARI (mean, min) |
-| --- | --- | --- |
-| 2shapes/0 | seed 1 → 1.000 | 0.598, −0.038 |
-| 3shapes/0 | seed 9 → 1.000 | 0.616, −0.001 |
+| Image | demo seed → ARI | generic random seeds ARI (mean, min) | raw-gauge mean, min |
+| --- | --- | --- | --- |
+| 2shapes/0 | seed 1 → 1.000 | 0.606, −0.038 | 0.598, −0.038 |
+| 3shapes/0 | seed 9 → 1.000 | 0.639, −0.001 | 0.616, −0.001 |
 
-Mean foreground ARI under generic seeds is ~0.6, with individual seeds
-occasionally landing near zero (the KMeans/eigenprojection pipeline
-occasionally fails to separate objects at all). **This is not a bug in the
-Python port**: the same static-claims section confirms the port mirrors
-`run_2layer.m` and `spatiotemporal_segmentation.m` exactly, and a control
-using phase-normalized eigenvectors (rotating each eigenvector so its
-largest-magnitude entry is real and positive, to remove the arbitrary global
-phase Hermitian eigendecomposition leaves unconstrained — ruling out a
-torch-`eigh`-vs-MATLAB-`eig` convention mismatch as the cause) gives
-essentially the same means (0.606 and 0.639) — **the seed sensitivity is a
-property of this clustering approach on these images**, not an eigenvector
-phase-convention artifact of the port.
+The seed-sensitivity control bypasses production canonicalization (a
+raw-gauge sweep). Patching ``eigh`` with the same pivot rotation is a no-op
+because production already applies it. Bypassing the gauge does not close
+the demo-vs-generic gap.
+
+**Direct Octave verification found a phase-convention mismatch, then a
+backend-independent projection fix.** With shared images and initial states,
+the default lower-triangle Torch `eigh` matches all raw trajectories, masks,
+and final correlations, but `3shapes` foreground partition ARI against
+Octave's `kmeans` labels was 0.9721244344 before canonicalization. Leading
+eigenvalues are well-separated (λ = [263.32, 0.674, 0.00523, …]). Both
+sides now canonicalize each eigenvector (largest-magnitude entry rotated to
+real-positive) before `real(rho) @ real(V)`. Projections then agree to
+~4e-12. sklearn `KMeans` on both projections yields ARI 1.0. Octave's own
+`kmeans` labels remain a non-target: on canonicalized `3shapes` they
+disagree with sklearn on the same array (ARI ~0.40). Under Octave's
+exported `x0`, neither clustering hits ground truth (`3shapes.mat`
+`labels[:,:,0]`): Python/sklearn foreground ARI 0.496, Octave `kmeans`
+0.077. The demo seed 9 still scores ARI 1.0 — that is a different initial
+state, not this fixture. Canonicalization does not resolve genuinely
+degenerate eigenspaces; the bundled/reference cases have none.
 
 This does not contradict the paper's headline claim ("93%/86% of pixels
 correctly clustered" over 1,000 images, `01_paper.md`): that is **pixel**

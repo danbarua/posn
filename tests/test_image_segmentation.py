@@ -1,104 +1,82 @@
+"""Cross-runtime checks against upstream MATLAB source executed by GNU Octave.
+
+Regenerate datasets/*_ref.mat with matlab/export_segmentation_references.m.
+Shared images/initial states avoid cross-runtime RNG assumptions. Keep raw
+complex128 amplitudes: the supplied trajectories overflow single precision.
+Eigenvector phase is canonicalized identically on both sides (see
+spatiotemporal_segmentation_torch and the exporter), so the real projection
+is a legitimate cross-runtime target independent of LAPACK backend.
+
+Octave's kmeans vs sklearn.KMeans initialization is not a parity target:
+on the 3shapes projection they produce ARI ~0.40 despite agreeing on the
+array to 4e-12. The test therefore compares Python's partition against
+sklearn run on Octave's exported projection, not against Octave's own
+kmeans labels.
 """
-test_image_segmentation.py
 
-Intended as a CI-server smoke test to verify the outputs of the Python port
-against the MATLAB reference implementation.
-
-TODO: Run the MATLAB reference implementation and save outputs in ./datasets folder
-Filenames expected: "2shapes_ref.mat", "3shapes_ref.mat", "natural_ref.mat"
-"""
-
-import math
 from pathlib import Path
 
 import numpy as np
 import pytest
-import scipy.io as sio
-import torch
+from scipy.io import loadmat
+from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score
+import torch
 
 from defns import DATA_DIR
-
-# ---- module under test -------------------------------------------------
-from src.cv_rnn import (
-    run_2layer_torch,
-    spatiotemporal_segmentation_torch,
-)
-
-DEVICE = torch.device("cpu")  # keep GPU out of the loop for CI
-DTYPE = torch.float32
-SEED = 1  # must match MATLAB ‘seed’ arg
+from src.cv_rnn import run_2layer_torch, spatiotemporal_segmentation_torch
 
 
-# helpers ----------------------------------------------------------------
-def _load_reference(mat_path):
-    mat = sio.loadmat(mat_path)
-    ref = {
-        k: torch.from_numpy(v.squeeze()).to(
-            torch.complex64 if np.iscomplexobj(v) else torch.float32
-        )
-        for k, v in mat.items()
-        if not k.startswith("__")
-    }
-    return ref
-
-
-def _phase_mse(a, b):
-    """mean-squared error of wrapped phases in [-π, π)."""
-    diff = torch.angle(torch.exp(1j * (torch.angle(a) - torch.angle(b))))
-    return torch.mean(diff.abs() ** 2).item()
-
-
-# ----------------------------------------------------------------------- #
-#                               parametrised                              #
-# ----------------------------------------------------------------------- #
 @pytest.mark.parametrize("demo_name", ["2shapes", "3shapes", "natural"])
 def test_cv_rnn_against_matlab(demo_name):
     ref_file = Path(DATA_DIR) / f"{demo_name}_ref.mat"
-    if not ref_file.exists():
-        pytest.skip(f"reference file {ref_file} missing")
-
-    ref = _load_reference(ref_file)
-    H = int(math.sqrt(ref["mask"].numel()))
-    image = torch.angle(ref["save_x"][:, 0]).view(H, H).to(DTYPE)
-
-    # ------ run Python pipeline ----------------------------------------
-    g = torch.Generator(device=DEVICE).manual_seed(SEED)
-    save_x_py, mask_py = run_2layer_torch(
+    assert ref_file.exists(), (
+        f"Missing {ref_file}; run matlab/export_segmentation_references.m in Octave"
+    )
+    ref = loadmat(ref_file)
+    schema = int(np.asarray(ref["schema_version"]).reshape(-1)[0])
+    assert schema == 2, (
+        f"{ref_file} has schema_version={schema}; regenerate with "
+        "matlab/export_segmentation_references.m"
+    )
+    image = torch.from_numpy(ref["im"])
+    initial_state = torch.from_numpy(ref["initial_state"].reshape(-1))
+    nt = tuple(int(value) for value in ref["nt"].ravel())
+    states, mask = run_2layer_torch(
         image,
-        generator=g,
-        device=DEVICE,
-        dtype=DTYPE,
+        initial_state=initial_state,
+        alpha=tuple(ref["alpha"].ravel()),
+        sigma=tuple(ref["sigma"].ravel()),
+        nt=nt,
     )
-    (cluster_py, _, _, _, _) = spatiotemporal_segmentation_torch(
-        save_x_py,
+    reference_mask = ref["mask"].ravel().astype(bool)
+    np.testing.assert_array_equal(mask.numpy(), reference_mask)
+    np.testing.assert_allclose(
+        states.numpy(), ref["save_x"], rtol=1e-10, atol=1e-12, equal_nan=True
+    )
+    n_clusters = int(ref["n_clusters"].item())
+    labels, rho, _, _, projection = spatiotemporal_segmentation_torch(
+        states,
         image,
-        mask_py,
-        nt_mask=60,  # paper default
-        n_clusters=int(ref["cluster_map"].max().item() + 1),
-        device=DEVICE,
+        mask,
+        nt_mask=nt[0],
+        n_clusters=n_clusters,
+        window_size=int(ref["window_size"].item()),
+        window_step=int(ref["window_step"].item()),
     )
-
-    # ------------------------------------------------------------------ #
-    # 1.  dynamics: compare final two frames (last of each layer)        #
-    # ------------------------------------------------------------------ #
-    t1 = 59  # 0-based index
-    t_end = save_x_py.shape[1] - 1
-    mse_l1 = _phase_mse(save_x_py[:, t1], ref["save_x"][:, t1])
-    mse_l2 = _phase_mse(save_x_py[:, t_end], ref["save_x"][:, t_end])
-    assert mse_l1 < 1e-6
-    assert mse_l2 < 1e-6
-
-    # ------------------------------------------------------------------ #
-    # 2.  mask identical                                                 #
-    # ------------------------------------------------------------------ #
-    assert torch.equal(mask_py, ref["mask"])
-
-    # ------------------------------------------------------------------ #
-    # 3.  segmentation: label-permutation-invariant equality             #
-    # ------------------------------------------------------------------ #
-    ari = adjusted_rand_score(
-        ref["cluster_map"].flatten().int().cpu(),
-        cluster_py.flatten().int().cpu(),
+    np.testing.assert_allclose(
+        rho[:, :, -1].numpy(), ref["rho_final"], rtol=1e-10, atol=1e-12
     )
-    assert ari == 1.0
+    np.testing.assert_allclose(
+        projection[:, :, -1].numpy(), ref["projection_final"], rtol=1e-9, atol=1e-11
+    )
+    predicted = labels.numpy()
+    truth = ref["cluster_map"]
+    np.testing.assert_array_equal(predicted == -1, truth == -1)
+    # projection_final is foreground-only in MATLAB column-major order.
+    # Extract Python's labels in the same order before comparing partitions.
+    sklearn_on_octave = KMeans(
+        n_clusters=n_clusters, random_state=0, n_init=1
+    ).fit_predict(ref["projection_final"])
+    python_foreground = predicted.T.reshape(-1)[reference_mask == False]
+    assert adjusted_rand_score(python_foreground, sklearn_on_octave) == 1.0

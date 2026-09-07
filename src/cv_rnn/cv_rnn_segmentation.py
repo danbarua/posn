@@ -14,6 +14,17 @@ import torch
 from sklearn.cluster import KMeans
 
 
+def _canonical_phase(vectors: torch.Tensor) -> torch.Tensor:
+    """Rotate each column so its largest-magnitude entry is real and positive.
+
+    Hermitian (and general) eigendecomposition leaves a unit-modulus global
+    phase per column unconstrained. ``real(V)`` therefore depends on the
+    LAPACK backend. This does not resolve genuinely degenerate eigenspaces.
+    """
+    pivots = vectors[vectors.abs().argmax(dim=0), torch.arange(vectors.shape[1])]
+    return vectors * (pivots.conj() / pivots.abs()).unsqueeze(0)
+
+
 def _complex_dtype(dtype: torch.dtype) -> torch.dtype:
     if dtype == torch.float64:
         return torch.complex128
@@ -187,9 +198,14 @@ def spatiotemporal_segmentation_torch(
 
     Eigenpairs are sorted by decreasing eigenvalue magnitude; D is the sorted
     diagonal matrix, correcting upstream ``D(:,ind)=d`` bookkeeping. Projection
-    follows ``real(rho) @ real(V[:,dim])``. Eigenvector complex phases and KMeans
-    initialization are solver-specific, so raw projections are not portable
-    bitwise parity targets.
+    follows ``real(rho) @ real(V[:,dim])``. Each eigenvector's global phase is
+    then canonicalized (rotated so its largest-magnitude entry is real and
+    positive) before taking its real part: Hermitian eigendecomposition
+    leaves that phase arbitrary and solver/backend-dependent (observed to
+    differ between this LAPACK binding and GNU Octave's, changing the real
+    projection and final partition on at least one bundled image otherwise).
+    Canonicalization does not resolve genuinely degenerate eigenspaces; the
+    bundled/reference cases have well-separated leading eigenvalues.
     """
     if save_x.ndim != 2 or not save_x.is_complex():
         raise ValueError("save_x must be a complex (pixels, samples) tensor")
@@ -231,6 +247,11 @@ def spatiotemporal_segmentation_torch(
         values, vectors = torch.linalg.eigh(similarity)
         order = values.abs().argsort(descending=True)
         values, vectors = values[order], vectors[:, order]
+        # Canonicalize each eigenvector's arbitrary global phase so the real
+        # projection below is backend-independent, not tied to one LAPACK's
+        # convention. Degenerate eigenspaces are not fixed by this; see the
+        # docstring.
+        vectors = _canonical_phase(vectors)
         rho[:, :, window] = similarity
         eigenvectors[:, :, window] = vectors
         eigenvalues[:, :, window].diagonal().copy_(values)

@@ -30,14 +30,13 @@ Unlike traditional deep learning approaches that require extensive training, the
 ```bash
 # Clone the repository
 git clone https://github.com/danbarua/posn.git
-cd cv-rnn
+cd posn
 
-# Create and activate a virtual environment (optional)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install the Python version and dependencies from the committed lockfile
+uv sync --locked
 
-# Install dependencies
-pip install -r requirements.txt
+# Run commands through the project environment
+uv run --locked python -m pytest -q
 ```
 
 ## Usage
@@ -53,15 +52,14 @@ pip install -r requirements.txt
 strict-majority mean-phase background mask, and inclusive-window phase-only
 clustering. State vectors use MATLAB column-major pixel order.
 
-Run from the repository root in the existing Conda environment against the
-bundled `datasets/2shapes.mat`, `3shapes.mat`, and `natural_image.mat`; no
-dependency sync, download, or MATLAB installation is needed:
+Run from the repository root with uv against the bundled
+`datasets/2shapes.mat`, `3shapes.mat`, and `natural_image.mat`;
+no dataset download or MATLAB installation is needed:
 
 ```bash
-conda activate posn
-python -m src.cv_rnn segmentation --dataset 2shapes --image-index 0 --n-clusters 2
-python -m src.cv_rnn segmentation --dataset natural --n-clusters 2 --plot
-python -m pytest tests/test_segmentation_math.py tests/test_segmentation_animation.py -q
+uv run --locked python -m src.cv_rnn segmentation --dataset 2shapes --image-index 0 --n-clusters 2
+uv run --locked python -m src.cv_rnn segmentation --dataset natural --n-clusters 2 --plot
+uv run --locked python -m pytest tests/test_segmentation_math.py tests/test_segmentation_animation.py -q
 ```
 
 `--plot` shows the input, background mask, and cluster map, the animated
@@ -93,19 +91,71 @@ fig, anim = animate_dynamics(states, tuple(image.shape))
 in original pixel order; `cluster_map` is image-shaped with `-1` for
 background. `tests/test_segmentation_math.py` checks the recurrence,
 masking, and eigensystem against independent NumPy/SciPy equations, not
-production helpers; `tests/test_image_segmentation.py` is a MATLAB
-cross-runtime parity check that stays skipped until reference `.mat` exports
-are added under `datasets/`.
+production helpers. `tests/test_image_segmentation.py` checks Python against
+the upstream MATLAB functions executed by GNU Octave, using exported
+`datasets/{2shapes,3shapes,natural}_ref.mat` fixtures.
+
+To regenerate all three fixtures (Docker required):
+
+```bash
+git submodule update --init --recursive
+docker build -t octave:optimized .
+docker run --rm -v "$PWD:/work" \
+  -e SCRIPT=/work/matlab/export_segmentation_references.m octave:optimized
+uv run --locked python -m pytest tests/test_image_segmentation.py -q
+```
+
+The Dockerfile includes `octave-statistics` for upstream `pdist2`/`kmeans`.
+Without an override, `$SCRIPT` defaults to `/matlab/hello_world.m`. The bind
+mount makes reference outputs persist in the host repository. Export runs
+without figures; the three examples took about three minutes on the development
+machine. Octave 6.4 needs the small `matlab/octave_compat/rng.m` adapter for
+upstream `rng(seed)` calls; it seeds Octave's supported random-state APIs.
+
+Fixtures use explicit MATLAB binary format (`save('-v7', ...)`), not Octave's
+default text format. They contain the real image, actual complex initial state,
+parameters, full complex128 trajectory, background mask, final correlation
+matrix, and cluster labels. Runtime version and upstream source text are
+embedded for provenance. Tests share arrays, not seeds.
+
+All three references match Python trajectories and correlations at
+`rtol=1e-10, atol=1e-12`, with exact masks. After identical eigenvector-phase
+canonicalization, the real projections agree (`rtol=1e-9, atol=1e-11`).
+sklearn `KMeans` on both projections then yields the same partition (ARI=1.0).
+Octave's own `kmeans` labels are a documented non-target: on `3shapes` they
+disagree with sklearn on the same array (ARI ~0.40) despite a 4e-12
+projection match. No ARI threshold was relaxed, and upstream MATLAB files
+were not changed. This verifies GNU Octave 6.4 execution of the MATLAB
+source, not proprietary MATLAB.
 
 `run_segmentation_example`'s bundled results use the demo's own hardcoded
 seeds (1 for 2shapes, 9 for 3shapes) and hit foreground ARI = 1.0 on every
-bundled image (`tests/test_segmentation_objects.py`). Generic random seeds do
+bundled shape image (`tests/test_segmentation_objects.py`). Generic random seeds do
 not reproduce this: a 20-seed sweep gives mean foreground ARI ≈ 0.6 (min near
-0) on the same images, and phase-normalizing eigenvectors rules out an
-eigendecomposition-convention artifact as the cause — see
+0) on the same images. Phase-normalizing eigenvectors does not eliminate
+seed sensitivity — that is a clustering-quality property of these images
+under random initializations, distinct from the backend-independent
+canonicalization used for cross-runtime partition parity. See
 [`docs/references/04_paper_vs_matlab_drift.md`](docs/references/04_paper_vs_matlab_drift.md)
 and `scripts/probe_paper_vs_matlab_drift.py` for the full measurement and
 other preprint/published/MATLAB drift this repository found and quantified.
+
+`scripts/plot_segmentation_eigenmodes.py` renders Figure-6-style diagnostics
+of the layer-2 recurrence matrix `B = K + i*diag(omega)` for both bundled
+2shapes images: eigenvalue magnitude/phase spectra, the six leading
+eigenvector phase maps, modal weight decay, and a full-vs-6-mode
+reconstruction of the raw trajectory. It is a comparable diagnostic, not an
+exact reproduction: upstream ships no Fig. 5/6 driver, and the bundled
+images carry only two discrete frequencies, giving piecewise-real
+eigenvectors (`Arg` ∈ {0, π}) instead of the paper's continuous phase
+gradients. `--synthetic` instead builds a clearly-labeled per-object
+frequency gradient (not bundled data) so the same analysis produces
+traveling-wave modes comparable to Fig. 6B.
+
+```bash
+uv run --locked python scripts/plot_segmentation_eigenmodes.py
+uv run --locked python scripts/plot_segmentation_eigenmodes.py --synthetic
+```
 
 `natural_image.mat`'s `lb` key is also real, ARI-comparable ground truth: a
 16-region semantic map (sky/ground/bear/etc, region IDs arbitrary — same
@@ -128,14 +178,12 @@ applying Boolean XOR in Python.
 
 ![xor_plot](plots/ring_network_xor.png)
 
-Run from the repository root in the existing Conda environment; no dependency
-sync or MATLAB installation is needed:
+Run from the repository root with uv; no MATLAB installation is needed:
 
 ```bash
-conda activate posn
-python -m src.cv_rnn xor
-python -m src.cv_rnn xor --plot
-python -m pytest tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
+uv run --locked python -m src.cv_rnn xor
+uv run --locked python -m src.cv_rnn xor --plot
+uv run --locked python -m pytest tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
 The first command prints the truth table without opening plots. `--plot`
@@ -173,14 +221,14 @@ Fourier solver in `src/cv_rnn/cv_nn.py` with XOR.
 ![memory_plot](plots/ring_network_memory.png)
 
 ```bash
-python -m src.cv_rnn memory
-python -m src.cv_rnn memory --plot
-python -m pytest tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
+uv run --locked python -m src.cv_rnn memory
+uv run --locked python -m src.cv_rnn memory --plot
+uv run --locked python -m pytest tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
-The demos use the package entry point (`python -m src.cv_rnn`), rather than
+The demos use the package entry point (`uv run --locked python -m src.cv_rnn`), rather than
 executing individual source files. `--seed` selects a reproducible PyTorch run;
-the default is 1. No environment synchronization or MATLAB installation is needed.
+the default is 1. No MATLAB installation is needed.
 
 The reference sequence is:
 
@@ -229,11 +277,11 @@ original alphabet in Supplementary Note 8 is not available locally.
 ![message_decoding](plots/ring_network_messaging_decoding.png)
 
 ```bash
-python -m src.cv_rnn message
-python -m src.cv_rnn message --text "HELLO WORLD" --plot
-python -m src.cv_rnn message --receiver-frequency-hz 9
-python -m src.cv_rnn message --receiver-seed 99
-python -m pytest tests/test_message_cv_nn.py tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
+uv run --locked python -m src.cv_rnn message
+uv run --locked python -m src.cv_rnn message --text "HELLO WORLD" --plot
+uv run --locked python -m src.cv_rnn message --receiver-frequency-hz 9
+uv run --locked python -m src.cv_rnn message --receiver-seed 99
+uv run --locked python -m pytest tests/test_message_cv_nn.py tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
 Input must be nonempty uppercase `A-Z` and spaces. Leading/trailing spaces and
@@ -241,7 +289,7 @@ repeated letters are preserved; unsupported characters are rejected, not silentl
 normalized. `--seed` defaults to 1 and controls reproducible sender experiments.
 `--frequency-hz` defaults to 10; receiver overrides intentionally allow mismatched
 frequency or initial-state experiments. `--dt` sets receiver sampling, default
-0.01 seconds. All commands use the existing Conda dependencies without downloads.
+0.01 seconds. Commands use the uv-managed project environment.
 
 The public alphabet uses 27 contiguous blocks of 16 nodes (432 total), with
 coupling strength 45 and phase lag 1.55. Each character gets a three-second

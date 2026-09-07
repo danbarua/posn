@@ -2,174 +2,133 @@
 
 ## Project Overview
 
-POSN is a PyTorch research implementation of complex-valued recurrent neural
-networks (cv-RNNs): fixed-weight, linear-dynamics oscillator networks that
-perform image segmentation (Liboni et al., PNAS 2025) and computation — XOR,
-short-term memory, message transmission (Budzinski et al., *Communications
-Physics* 2024) — with no training loop. `matlab/liboniEA2025image/` and
-`matlab/budzinskiEAexact/` are the upstream MATLAB reference submodules each
-Python module ports from; `docs/references/` holds the papers, preprint, and
-a dedicated write-up quantifying where the paper text and the MATLAB code
-disagree (see Key Directories).
+POSN implements fixed-weight complex-valued oscillator networks in PyTorch:
+image segmentation (Liboni et al., PNAS 2025), XOR, memory, and experimental
+message transmission (Budzinski et al., Communications Physics 2024).
+There is no training loop. MATLAB submodules are the numerical references;
+`docs/references/` records the papers and known paper/code discrepancies.
 
 ## Architecture & Data Flow
 
-Two independent simulation families live under `src/cv_rnn/`; **do not mix
-their conventions**:
+Two numerical families live in `src/cv_rnn/`; do not mix their conventions:
 
-- **Segmentation** (`cv_rnn_segmentation.py`): raw discrete matrix iterates
-  (`x_next = (K + i·diag(ω)) @ x`, **not** a normalized Euler step), double
-  precision by default (`complex128`/`float64` — the bundled examples reach
-  amplitudes that overflow single precision). `gaussian_sheet_torch`
-  builds dense Gaussian coupling → `run_2layer_torch` evolves two layers
-  (layer 1 finds the background via strict-majority mean phase; layer 2
-  disables background coupling and restarts from the original phases,
-  masked entries become NaN) → `spatiotemporal_segmentation_torch` computes
-  windowed conjugate correlations, eigendecomposes, projects to real
-  features, and runs scikit-learn KMeans on CPU (background label is `-1`).
-  `segmentation_demo.py` wraps this into a `SegmentationExample` dataclass
-  (`run_segmentation_example`, `plot_segmentation_comparison`,
-  `save_segmentation_comparison`) used by the CLI, README, and tests. State
-  vectors use **MATLAB column-major pixel order** throughout — flattening in
-  the wrong order silently transposes images.
-- **Ring-network demos** (`cv_nn.py`'s `RingCVNN` base, plain class, *not*
-  `torch.nn.Module`): exact analytical Fourier propagator via cached FFT
-  eigen-rates — no Euler step, no renormalization, complex128/float64.
-  `XorCVNN` and `MemoryCVNN` subclass it with fixed MATLAB-matching
-  parameters baked into `__init__` defaults (`XorCVNN`: N=201, ε=50,
-  φ=1.56; `MemoryCVNN`: N=321, ε=45, φ=1.55); `MessageDemo` *composes* a
-  `RingCVNN` internally (`self._dynamics`) rather than subclassing it.
-  `design_input(target, target_time)` runs evolution backwards in time to
-  inverse-design an initial state that reaches `target` at `target_time`.
-
-Entry point: `src/cv_rnn/__main__.py`'s `main()` dispatches
-`python -m src.cv_rnn {xor,memory,message,segmentation}` — read its
-docstring for the exact per-subcommand flag set before adding a new one.
-Public API surface is consolidated in `src/cv_rnn/__init__.py`; plotting
-(`cv_nn_plot_phase_dynamics.animate_dynamics`,
-`cv_rnn_plot_spectral_clustering.plot_spectral_clustering`, per-class
-`.plot()` methods) always returns a `Figure` and never calls `plt.show()` —
-callers/CLI decide whether to display it.
+- `cv_rnn_segmentation.py`: dense Gaussian coupling, raw discrete recurrence
+  `x_next = (K + i*diag(image(:))) @ x`, strict-majority phase background
+  mask, then restart from the original initial state with background disabled.
+  No Euler timestep or magnitude normalization. Windowed phase correlations,
+  eigenvectors, real projection, and CPU KMeans produce object labels.
+- Segmentation uses MATLAB column-major pixel order, float64/complex128,
+  `-1` background labels, and NaNs for masked layer-2 history. The Gaussian
+  geometry deliberately preserves upstream's rectangular-grid convention;
+  see the drift document before changing it.
+- `segmentation_demo.py` bundles numerical results in `SegmentationExample`;
+  loading labels/scoring/plotting happen after inference. Shapes have an
+  explicit zero-valued background label; natural-image `lb` is a region map
+  scored with whole-image ARI, not foreground/background metrics.
+- `cv_nn.py` defines `RingCVNN`, a plain Python class with cached FFT
+  eigen-rates and exact Fourier propagation. `XorCVNN`/`MemoryCVNN` subclass
+  it; `MessageDemo` composes it. `design_input` propagates backwards to
+  construct inputs reaching a specified target at a specified time.
+- `src/cv_rnn/__main__.py` dispatches `xor`, `memory`, `message`, and
+  `segmentation`. Plot functions return figures; callers choose display.
 
 ## Key Directories
 
-- `src/cv_rnn/`: both model families above, plus plotting.
-- `src/utils.py`: `simple_nanvar` — NaN-aware variance (`n=0` → NaN, `n=1`
-  → `0.0` regardless of `unbiased`); unused by `src/cv_rnn` (grep finds no
-  importers), a legacy standalone helper rather than a shared dependency.
-- `tests/`: 9 files. Ring-network demos check against a hand-written
-  `scipy.linalg.expm` reference at `rtol/atol≈2e-11`; segmentation math is
-  checked against independent NumPy/SciPy re-derivations, not production
-  code. `tests/conftest.py` forces the `Agg` matplotlib backend at
-  collection time (must run before any test module imports `pyplot`).
-- `datasets/`: bundled `2shapes.mat`, `3shapes.mat`, `natural_image.mat` —
-  these are **inputs**, not reference outputs.
-- `matlab/liboniEA2025image/`, `matlab/budzinskiEAexact/`: upstream
-  reference submodules; `git submodule update --init --recursive` if empty.
-- `docs/references/`: `00_preprint.md` (arXiv v1 excerpts, verified against
-  the actual LaTeX source, not a lossy PDF conversion), `01_paper.md` /
-  `02_supplementary.md` (published PNAS 2025 + SI), `03_paper.md` (Budzinski
-  *Communications Physics* 2024), `04_paper_vs_matlab_drift.md` (measured
-  effect of every paper-text-vs-MATLAB-code discrepancy found so far — read
-  this before trusting "the paper says X" in isolation). `docs/_archive/` is
-  untracked historical proposals, not current architecture.
-- `scripts/probe_paper_vs_matlab_drift.py`: the investigative script behind
-  `04_paper_vs_matlab_drift.md`. Re-run and update the doc together after
-  touching amplitude/layer-2-init/window code or the MATLAB submodule pin.
-  This is **not** a regression test (~4 min runtime, prints a report).
-- `plots/`: committed demo output (PNG/GIF) referenced by `README.md`.
+- `src/cv_rnn/`: simulation, evaluation, plotting, and CLI.
+- `tests/`: pytest numerical/behavior checks; `conftest.py` selects Agg before
+  pyplot imports. Ring-network references use independent SciPy `expm`.
+- `datasets/`: bundled images plus exported `*_ref.mat` Octave fixtures.
+- `matlab/liboniEA2025image/`, `matlab/budzinskiEAexact/`: upstream submodules;
+  do not edit them to make Python comparisons pass.
+- `matlab/export_segmentation_references.m`: reference exporter calling
+  upstream functions with shared images/initial states and recorded parameters.
+- `docs/references/04_paper_vs_matlab_drift.md` and
+  `scripts/probe_paper_vs_matlab_drift.py`: paired investigation and report.
+- `plots/`: committed PNG/GIF examples embedded by README; unrelated scratch
+  output is not a deliverable to overwrite.
+- `src/utils.py`: legacy standalone `simple_nanvar`, unused by `src/cv_rnn`.
 
 ## Development Commands
 
-Run from the repository root (`src`/`defns` imports depend on it):
+Run from the repository root; Python imports depend on it:
 
 ```bash
-conda activate posn
-python -m pytest -q                                          # 37 passed, 3 skipped
-python -m src.cv_rnn xor [--seed N] [--plot]
-python -m src.cv_rnn memory [--seed N] [--plot]
-python -m src.cv_rnn message [--text "HELLO"] [--frequency-hz 10] [--plot]
-python -m src.cv_rnn segmentation --dataset {2shapes,3shapes,natural} [--image-index N] [--n-clusters N] [--plot]
-python scripts/probe_paper_vs_matlab_drift.py                 # investigative, not a test
+uv sync --locked
+uv run --locked python -m pytest -q
+uv run --locked python -m src.cv_rnn xor
+uv run --locked python -m src.cv_rnn memory --plot
+uv run --locked python -m src.cv_rnn message --text "HELLO WORLD"
+uv run --locked python -m src.cv_rnn segmentation --dataset natural --plot
+uv run --locked python scripts/probe_paper_vs_matlab_drift.py
 ```
 
-`environment.yml` (Conda env `posn`) is what this repo is actually developed
-and verified against. `uv.lock` exists on disk but is **untracked in git**
-(`git status` shows `?? uv.lock`) — `uv sync --locked` only works if that
-file happens to already be present locally; it is not reproducible from a
-fresh clone. Treat `pyproject.toml` + `requirements.txt` as the source of
-truth for direct dependencies, not `uv.lock`. `requirements.txt` mirrors
-`pyproject.toml`'s constraints exactly, for a pip/venv alternative.
+Generate Octave reference fixtures through the container's `$SCRIPT` contract:
 
-No build system, no installed console-script entry point (always
-`python -m src.cv_rnn`, never a bare `posn` command), no lint/format/CI
-config (`ruff`/`mypy` appear only as IDE inspection profiles under `.idea/`
-and Conda dev-tool entries in `environment.yml`, not as committed config or
-a project gate).
+```bash
+docker build -t octave:optimized .
+docker run --rm -v "$PWD:/work" \
+  -e SCRIPT=/work/matlab/export_segmentation_references.m octave:optimized
+uv run --locked python -m pytest tests/test_image_segmentation.py -q
+```
+
+The Dockerfile installs Octave and `octave-statistics` (`pdist2`, `kmeans`).
+Default `SCRIPT` is `/matlab/hello_world.m`. Mount the repository read/write
+for export so generated files persist under host `datasets/`. The exporter uses
+explicit MATLAB binary `-v7` format; `matlab/octave_compat/rng.m` supplies only
+the upstream `rng(seed)` call on Octave versions lacking it.
 
 ## Code Conventions & Common Patterns
 
-- Explicit `device`/`torch.Generator(device=...).manual_seed(seed)`
-  parameters everywhere; no class manages global RNG state, and no state
-  survives past one `encode`/`make_key`/`run` call.
-- Complex dtype tracks precision, not "family": both simulation families
-  default to double precision (segmentation: `complex128` from `float64`
-  images; ring-network demos: `complex128`/`float64` throughout). The one
-  `complex64`/`float32` exception is `test_image_segmentation.py`'s pinned
-  CI-parity dtype, not the production default — don't generalize from it.
-- Errors are plain `ValueError` with a descriptive message (unsupported
-  alphabet characters, out-of-bounds target delays, missing cue-boundary
-  samples), not custom exception types.
-- Background/masked sentinel values are load-bearing: `-1` for background
-  cluster labels, NaN for masked-out history entries — don't blanket-replace
-  them without checking what reads them downstream.
-- No dependency-injection framework, no structured logging, no async.
+- Both numerical families default to float64/complex128. Segmentation raw
+  amplitudes can overflow float32; do not downcast parity fixtures.
+- Explicit device and RNG inputs; equal seeds across Torch/MATLAB/Octave do
+  not imply equal draws. Cross-runtime tests share the exported initial array.
+- Plain descriptive `ValueError` for invalid inputs; numerical overflow is
+  reported rather than normalized away. Preserve NaN/background semantics.
+- No DI framework, structured logging, or async model code.
+- Label IDs are arbitrary: compare partitions with ARI. Eigenvector global
+  phase is canonicalized (largest-magnitude entry rotated to real-positive)
+  on both Python and Octave sides before taking `real(V)`: this is
+  backend-independent, not tied to one LAPACK's triangle-convention. The
+  three reference cases enforce trajectory/mask/rho/projection parity and
+  sklearn-on-both-projections agreement. Octave's own `kmeans` labels are
+  not a parity target (3shapes ARI ~0.40 vs sklearn on the same array).
+  Canonicalization does not resolve genuinely degenerate eigenspaces.
 
 ## Important Files
 
-- `src/cv_rnn/__init__.py`: the public API (`gaussian_sheet_torch`,
-  `run_2layer_torch`, `spatiotemporal_segmentation_torch`,
-  `animate_dynamics`, `plot_spectral_clustering`, `XorCVNN`, `MemoryCVNN`,
-  `MemoryRun`, `MessageDemo`, `MessageKey`, `Ciphertext`, `InputEvent`,
-  `MessageTrace`, `DecodedSymbol`, `ChimeraAlphabet`).
-- `src/cv_rnn/__main__.py`: CLI entry point; `main()`'s docstring is the
-  authoritative flag reference.
-- `defns.py`: `ROOT_DIR`/`DATA_DIR`/`DATASET_2SHAPES` path constants.
-  `DATA_DIR` is a plain `str` (use `Path(DATA_DIR)` for `/` joins);
-  `DATASET_2SHAPES` omits the `.mat` suffix.
-- `docs/references/04_paper_vs_matlab_drift.md` +
-  `scripts/probe_paper_vs_matlab_drift.py`: keep these two in sync.
-- `main.py`: still a `print_hi` greeting template, not a real entry point.
-- `README.md`: the primary usage doc, per feature, including known caveats
-  (seed-sensitive segmentation ARI, message demo is explicitly not secure
-  encryption, ring-network MATLAB parity is unverified — see Testing & QA).
+- `pyproject.toml` + committed `uv.lock`: dependency definition and resolution.
+- `.python-version`: Python 3.12 selection.
+- `src/cv_rnn/__init__.py`: public exports; `__main__.py`: CLI flags/dispatch.
+- `defns.py`: root/data paths (`DATA_DIR` is a string; wrap with `Path`).
+- `Dockerfile`, `scripts/octave_runner.sh`: Octave runtime and script dispatch.
+- `main.py`: greeting template, not the application entry point.
+- `README.md`: usage and scientific caveats; message transmission is not
+  secure encryption, and segmentation quality is seed-sensitive.
 
 ## Runtime/Tooling Preferences
 
-Python **3.12** pinned (`.python-version`); `pyproject.toml` only requires
-`>=3.12`. Core pinned deps: `numpy~=1.26.4`, `scipy~=1.15.2`,
-`scikit-learn~=1.6.1`, `matplotlib~=3.10.1`, `torch~=2.2.2`,
-`torchvision~=0.17.2`, `pytest~=7.4.4`. `scripts/setup_conda.sh` only checks
-whether Conda is present; it does not create or activate an environment.
+Use **uv**. `uv.lock` is the committed, locked dependency authority;
+`uv sync --locked` installs it and `uv run --locked` executes commands in
+it. Python 3.12 is pinned; project metadata requires >=3.12. No installed
+`posn` console command, build backend, or project lint/format/CI gate is
+configured.
 
 ## Testing & QA
 
-Plain `test_*` functions and assertions, heavy `@pytest.mark.parametrize`,
-no custom fixtures beyond `tmp_path`. Last verified: `python -m pytest -q`
-→ 37 passed, 3 skipped, ~13s on CPU.
+Use focused tests for changed behavior, then `uv run --locked python -m pytest`.
+Keep independent numerical references independent of production helpers.
+`test_image_segmentation.py` consumes Octave-generated references, sharing the
+actual image and complex initial state; it must not derive image frequencies
+from initial phases or assume cross-runtime RNG parity. Regenerate fixtures
+when upstream inputs, numerical parameters, or the submodule revision change.
+Octave execution of MATLAB source is not verification on proprietary MATLAB.
+Ring-network tests remain SciPy-reference checks, not cross-runtime verification.
+Shape-demo ARI=1 applies to the provided examples and selected seeds, not all
+random initializations. No coverage threshold is configured.
 
-- **Independent-reference pattern**: ring-network tests (`test_xor_cv_nn.py`,
-  `test_memory_cv_nn.py`, `test_message_cv_nn.py`, `test_local_synchrony.py`)
-  validate against a from-scratch `scipy.linalg.expm` matrix-exponential
-  reference at `rtol/atol≈2e-11` — this checks internal consistency, **not**
-  MATLAB output. `test_segmentation_math.py` similarly hand-codes
-  MATLAB-equivalent NumPy/SciPy formulas independent of production code.
-- **The one skip**: `test_image_segmentation.py` needs
-  `datasets/{2shapes,3shapes,natural}_ref.mat` (MATLAB-produced) that aren't
-  bundled — true MATLAB/Octave cross-runtime parity is not yet established
-  for any demo.
-- `test_segmentation_objects.py` documents that ARI=1.0 on every bundled
-  image is specific to the demo's hardcoded seeds (1 for 2shapes, 9 for
-  3shapes); see `docs/references/04_paper_vs_matlab_drift.md` section 4 for
-  the measured seed sensitivity (generic seeds: mean ARI≈0.6).
-- No CI workflow, no coverage config or threshold.
+Under uv, `threadpoolctl` emits a RuntimeWarning about Intel OpenMP
+(`libiomp`, bundled with torch) and LLVM OpenMP (`libomp`, used by sklearn)
+being loaded together. Observed as a warning on this macOS machine; it is a
+documented deadlock source on Linux. Do not set `KMP_DUPLICATE_LIB_OK`.
+See the threadpoolctl multiple-OpenMP guidance if a hang appears.

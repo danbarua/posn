@@ -3,7 +3,7 @@
 MATLAB reference implementation for the image-segmentation cv-RNN.
 
 Run:
-    conda run -n posn python scripts/probe_paper_vs_matlab_drift.py
+    uv run --locked python scripts/probe_paper_vs_matlab_drift.py
 
 This is an investigative report, not a regression test or a proposal to
 change production defaults. `src/cv_rnn` intentionally follows the MATLAB
@@ -377,28 +377,8 @@ def window_probe(dataset: str, image_index: int, seed: int) -> dict:
 
 # --------------------------------------------------------------------------
 # 5. Seed sensitivity: the demo's hand-picked seeds vs generic random seeds,
-#    with an eigenvector-phase-convention control to rule out a port artifact
+#    with a raw-gauge control (production canonicalization bypassed)
 # --------------------------------------------------------------------------
-
-
-_ORIGINAL_EIGH = torch.linalg.eigh
-
-
-def _phase_normalized_eigh(matrix: torch.Tensor):
-    """Drop-in replacement for torch.linalg.eigh with a fixed eigenvector phase.
-
-    Hermitian eigenvectors are only defined up to an arbitrary unit-modulus
-    global phase per column; torch's LAPACK binding and MATLAB's may pick a
-    different (equally valid) phase than each other. Rotate each column so
-    its largest-magnitude entry is real and positive, removing that
-    arbitrariness, to check whether `real(rho) @ real(V)` (both here and in
-    spatiotemporal_segmentation.m) is sensitive to which convention is used.
-    """
-    values, vectors = _ORIGINAL_EIGH(matrix)
-    idx = vectors.abs().argmax(dim=0)
-    phase = vectors[idx, torch.arange(vectors.shape[1])]
-    phase = phase / phase.abs()
-    return values, vectors / phase.unsqueeze(0)
 
 
 def seed_sensitivity_probe(
@@ -406,11 +386,14 @@ def seed_sensitivity_probe(
 ) -> dict:
     """Compare the demo's hand-picked seed against generic random seeds.
 
-    Also reruns the random-seed sweep with eigenvectors phase-normalized
-    (see `_phase_normalized_eigh`) to check whether an eigenvector global-
-    phase artifact -- rather than a genuine property of the model -- is
-    responsible for any gap between the demo seed and generic seeds.
+    Also reruns the random-seed sweep with production's eigenvector
+    canonicalization bypassed, so the comparison measures whether the
+    remaining solver-dependent gauge affects seed-sweep ARI. Patching
+    ``eigh`` with the same pivot rotation is a no-op: production already
+    applies it after ``eigh``.
     """
+    from src.cv_rnn import cv_rnn_segmentation as seg
+
     image, truth, n_clusters = _load_example(dataset, image_index)
     n = image.numel()
 
@@ -426,16 +409,14 @@ def seed_sensitivity_probe(
         return ari
 
     demo_ari = run_seed(demo_seed)
-
     random_aris = [run_seed(50_000 + trial) for trial in range(n_random_trials)]
 
-
-    original_eigh = torch.linalg.eigh
-    torch.linalg.eigh = _phase_normalized_eigh
+    original = seg._canonical_phase
+    seg._canonical_phase = lambda vectors: vectors
     try:
-        phase_normalized_aris = [run_seed(50_000 + trial) for trial in range(n_random_trials)]
+        raw_gauge_aris = [run_seed(50_000 + trial) for trial in range(n_random_trials)]
     finally:
-        torch.linalg.eigh = original_eigh
+        seg._canonical_phase = original
 
     return {
         "dataset": dataset,
@@ -444,8 +425,8 @@ def seed_sensitivity_probe(
         "demo_ari": demo_ari,
         "random_ari_mean": float(np.mean(random_aris)),
         "random_ari_min": float(np.min(random_aris)),
-        "phase_normalized_ari_mean": float(np.mean(phase_normalized_aris)),
-        "phase_normalized_ari_min": float(np.min(phase_normalized_aris)),
+        "raw_gauge_ari_mean": float(np.mean(raw_gauge_aris)),
+        "raw_gauge_ari_min": float(np.min(raw_gauge_aris)),
         "n_random_trials": n_random_trials,
     }
 
@@ -568,23 +549,24 @@ def main() -> None:
     print()
     print("=" * 78)
     print("5. Seed sensitivity: demo's hand-picked seed vs generic random seeds")
-    print("   (with an eigenvector-phase-convention control)")
+    print("   (with a raw-gauge control: production canonicalization bypassed)")
     print("=" * 78)
     for dataset, idx, demo_seed in [("2shapes", 0, 1), ("3shapes", 0, 9)]:
         result = seed_sensitivity_probe(dataset, idx, demo_seed)
         print(
             f"  {dataset}/{idx}: demo seed={demo_seed} ARI={result['demo_ari']:.3f} | "
             f"generic random seeds ARI mean={result['random_ari_mean']:.3f} "
-            f"min={result['random_ari_min']:.3f} | phase-normalized-eigenvector "
-            f"ARI mean={result['phase_normalized_ari_mean']:.3f} "
-            f"min={result['phase_normalized_ari_min']:.3f} "
+            f"min={result['random_ari_min']:.3f} | raw-gauge "
+            f"ARI mean={result['raw_gauge_ari_mean']:.3f} "
+            f"min={result['raw_gauge_ari_min']:.3f} "
             f"({result['n_random_trials']} random seeds)"
         )
     print()
-    print("Phase-normalizing eigenvectors before taking their real part does not")
-    print("close the gap between the demo seed and generic seeds: the ARI floor")
-    print("under generic seeds is a property of this clustering approach on these")
-    print("images, not a torch-vs-MATLAB eigenvector-phase-convention artifact.")
+    print("Bypassing production's eigenvector canonicalization does not close")
+    print("the gap between the demo seed and generic seeds in this sweep.")
+    print("Seed sensitivity is a clustering-quality property of these images")
+    print("under random initializations, distinct from the gauge used for")
+    print("cross-runtime projection parity.")
     print("The paper's headline '93%/86% of pixels correctly clustered' is a")
     print("PIXEL accuracy over 1,000 images (background pixels included, and they")
     print("dominate: ~81% of pixels in the 2shapes/0 example are background); it")
