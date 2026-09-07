@@ -17,8 +17,10 @@ disagree (see Key Directories).
 Two independent simulation families live under `src/cv_rnn/`; **do not mix
 their conventions**:
 
-- **Segmentation** (`cv_rnn_segmentation.py`): explicit-Euler recurrence with
-  unit-circle renormalization, complex64/float32. `gaussian_sheet_torch`
+- **Segmentation** (`cv_rnn_segmentation.py`): raw discrete matrix iterates
+  (`x_next = (K + i·diag(ω)) @ x`, **not** a normalized Euler step), double
+  precision by default (`complex128`/`float64` — the bundled examples reach
+  amplitudes that overflow single precision). `gaussian_sheet_torch`
   builds dense Gaussian coupling → `run_2layer_torch` evolves two layers
   (layer 1 finds the background via strict-majority mean phase; layer 2
   disables background coupling and restarts from the original phases,
@@ -109,9 +111,11 @@ a project gate).
 - Explicit `device`/`torch.Generator(device=...).manual_seed(seed)`
   parameters everywhere; no class manages global RNG state, and no state
   survives past one `encode`/`make_key`/`run` call.
-- Complex dtype tracks the family: segmentation is complex64 (from float32
-  images); every ring-network demo is complex128 (float64). Don't downcast
-  across the boundary.
+- Complex dtype tracks precision, not "family": both simulation families
+  default to double precision (segmentation: `complex128` from `float64`
+  images; ring-network demos: `complex128`/`float64` throughout). The one
+  `complex64`/`float32` exception is `test_image_segmentation.py`'s pinned
+  CI-parity dtype, not the production default — don't generalize from it.
 - Errors are plain `ValueError` with a descriptive message (unsupported
   alphabet characters, out-of-bounds target delays, missing cue-boundary
   samples), not custom exception types.
