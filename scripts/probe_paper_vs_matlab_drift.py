@@ -451,6 +451,48 @@ def seed_sensitivity_probe(
 
 
 # --------------------------------------------------------------------------
+# 6. gaussian_sheet_torch node ordering vs. im(:) column-major indexing
+# --------------------------------------------------------------------------
+
+
+def gaussian_sheet_indexing_probe(nrow: int, ncol: int, amp: float = 1.0, sigma: float = 0.3) -> dict:
+    """Quantify gaussian_sheet_torch's node-ordering mismatch against im(:).
+
+    gaussian_sheet_torch (a faithful port of gaussian_sheet.m) indexes node
+    positions by meshgrid(row,col); the frequency vector elsewhere is built
+    via im(:) column-major indexing. These only agree when nrow == ncol. No
+    simulation: pure index/geometry arithmetic plus one gaussian_sheet_torch
+    call.
+    """
+    weights = gaussian_sheet_torch(nrow, ncol, amp, sigma, dtype=torch.float64).real
+    n = nrow * ncol
+    pos = torch.zeros(n, 2, dtype=torch.float64)
+    for row in range(nrow):
+        for col in range(ncol):
+            k = col * nrow + row
+            pos[k, 0] = (row + 1) / nrow
+            pos[k, 1] = (col + 1) / ncol
+    dist = torch.cdist(pos, pos)
+    expected = amp * torch.exp(-dist**2 / (2 * sigma**2))
+    diff = (weights - expected).abs()
+    worst = int(diff.argmax())
+    k1, k2 = worst // n, worst % n
+    return {
+        "nrow": nrow,
+        "ncol": ncol,
+        # k=0 vs k=nrow: physically adjacent under im(:) (same row, next column).
+        "adjacent_pair_weight": float(weights[0, nrow].item()),
+        # k=0 vs k=ncol: not physically adjacent (different row and column).
+        "nonadjacent_pair_weight": float(weights[0, ncol].item()),
+        "worst_pair": (k1, k2),
+        "worst_pair_expected": float(expected[k1, k2].item()),
+        "worst_pair_actual": float(weights[k1, k2].item()),
+        "max_abs_diff": float(diff.max().item()),
+        "mean_abs_diff": float(diff.mean().item()),
+    }
+
+
+# --------------------------------------------------------------------------
 # Report
 # --------------------------------------------------------------------------
 
@@ -548,6 +590,24 @@ def main() -> None:
     print("dominate: ~81% of pixels in the 2shapes/0 example are background); it")
     print("is a different quantity from foreground ARI on a single seed, and is")
     print("not inconsistent with a modest mean foreground ARI under generic seeds.")
+
+    print()
+    print("=" * 78)
+    print("6. gaussian_sheet_torch node ordering vs. im(:) column-major indexing")
+    print("=" * 78)
+    for nrow, ncol in [(3, 5), (4, 6)]:
+        result = gaussian_sheet_indexing_probe(nrow, ncol)
+        wk1, wk2 = result["worst_pair"]
+        print(
+            f"  {nrow}x{ncol}: adjacent pair (k=0,k={nrow}) weight="
+            f"{result['adjacent_pair_weight']:.4f} | non-adjacent pair (k=0,k={ncol}) "
+            f"weight={result['nonadjacent_pair_weight']:.4f} | worst pair (k={wk1},k={wk2}) "
+            f"expected={result['worst_pair_expected']:.4f} actual={result['worst_pair_actual']:.4f} | "
+            f"max|diff|={result['max_abs_diff']:.4f} mean|diff|={result['mean_abs_diff']:.4f}"
+        )
+    print()
+    print("For nrow==ncol (all three bundled images), this is a diagonal coordinate")
+    print("swap that preserves every pairwise distance, so the mismatch is invisible.")
 
 
 if __name__ == "__main__":

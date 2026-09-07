@@ -215,13 +215,21 @@ every node's `(x, y)` position uniformly preserves all pairwise Euclidean
 distances (a diagonal reflection), so the resulting weight matrix is
 identical regardless. For a **non-square** image it is not a reflection —
 `ncol != nrow` means indexing by the wrong dimension picks genuinely
-different points. Concretely, for a 3-row × 5-col grid, pixels `(row=2,
-col=1)` and `(row=0, col=2)` are diagonally far apart under `im(:)`
-indexing (normalized Euclidean distance 0.696, expected coupling ≈0.068 at
-`sigma=0.3`) but `gaussian_sheet_torch` assigns them coupling **0.80** — as
-if they were adjacent. Full weight matrix vs. the physically-correct
-distance-based matrix: max abs diff 0.73, mean abs diff 0.21 (out of an
-amplitude-1 kernel).
+different points, and the effect inverts adjacency rather than just
+attenuating it. `scripts/probe_paper_vs_matlab_drift.py`'s
+`gaussian_sheet_indexing_probe`, section 6:
+
+```
+3x5: adjacent pair (k=0,k=3) weight=0.1353 | non-adjacent pair (k=0,k=5) weight=0.5394 | worst pair (k=5,k=6) expected=0.0678 actual=0.8007 | max|diff|=0.7329 mean|diff|=0.2065
+4x6: adjacent pair (k=0,k=4) weight=0.0847 | non-adjacent pair (k=0,k=6) weight=0.7066 | worst pair (k=7,k=8) expected=0.0377 actual=0.8570 | max|diff|=0.8193 mean|diff|=0.2207
+```
+
+For a 4-row × 6-col grid, `k=0` and `k=4` are physically **adjacent** under
+`im(:)` (same row, next column) yet `gaussian_sheet_torch` assigns them
+coupling **0.08** — as if far apart. `k=0` and `k=6` are **not** adjacent
+(two rows down, one column over) yet get coupling **0.71** — as if close.
+The full weight matrix vs. the physically-correct distance-based matrix
+disagrees by up to 0.82 (mean 0.22) out of an amplitude-1 kernel.
 
 **This is an upstream MATLAB quirk** (`gaussian_sheet.m`'s own `pos` array
 has the same property relative to `im(:)`), not something introduced by the
