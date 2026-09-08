@@ -1,29 +1,24 @@
 # CV-RNN: Complex-Valued Recurrent Neural Networks for Image Segmentation and Computation
 
-This repository provides a PyTorch implementation of Complex-Valued Recurrent Neural Networks (cv-RNNs) for image segmentation and computational tasks as described in the following papers:
+This repository implements complex-valued recurrent neural networks (cv-RNNs) in PyTorch. The networks segment images and perform computational tasks from these papers:
 
-- [Image segmentation with traveling waves in an exactly solvable recurrent neural network](https://doi.org/10.1073/pnas.2321319121) by Liboni et al. (PNAS, 2025; preprint: [arXiv:2311.16943](https://arxiv.org/abs/2311.16943))
-- [An exact mathematical description of computation with transient spatiotemporal dynamics in a complex-valued neural network](https://doi.org/10.1038/s42005-024-01728-0) by Budzinski et al. (2024)
+- [Image segmentation with traveling waves in an exactly solvable recurrent neural network](https://doi.org/10.1073/pnas.2321319121) by Liboni et al. (PNAS, 2025). The preprint is [arXiv:2311.16943](https://arxiv.org/abs/2311.16943).
+- [An exact mathematical description of computation with transient spatiotemporal dynamics in a complex-valued neural network](https://doi.org/10.1038/s42005-024-01728-0) by Budzinski et al. (2024).
 
 ## Overview
 
-This project explores a novel approach to neural network design where:
+Each node stores a complex number with an amplitude and a phase. Linear dynamics produce patterns that change across nodes and over time. These phase patterns support image segmentation and computation. Closed-form mathematical expressions describe the network dynamics.
 
-- Each node has a state represented by a complex number (with amplitude and phase)
-- The network uses linear dynamics but exhibits rich spatiotemporal patterns
-- These phase patterns enable image segmentation and computation
-- The entire system is "exactly solvable" with closed-form mathematical expressions
-
-Unlike traditional deep learning approaches that require extensive training, these cv-RNNs perform tasks like image segmentation using sophisticated spatiotemporal dynamics with a *single set of fixed weights*.
+The networks use **fixed weights**. They do not need the training that traditional deep-learning methods require.
 
 ![CV-RNN Dynamics](plots/two-shapes-dynamics.gif)
 
 ## Features
 
-- **Image Segmentation**: Segment objects in images using traveling waves of phase synchronization
-- **XOR Computation**: Reproduce the MATLAB example using inverse-designed complex inputs, additive interference, and a shared-cluster synchrony decoder
-- **Short-Term Memory**: Reproduce the eight-item MATLAB memory task, including sequential recall and clearing
-- **Message Transmission (Experimental)**: Encode letters and spaces as transient phase-coherent clusters; this is not secure encryption
+- **Image segmentation:** The network separates objects through traveling waves of synchronized phases.
+- **XOR computation:** The implementation reproduces the MATLAB example. It calculates complex inputs through inverse evolution and adds the inputs. A decoder reads phase synchrony in their shared target cluster.
+- **Short-term memory:** The implementation reproduces the eight-item MATLAB task, including sequential recall and memory clearing.
+- **Experimental message transmission:** The demo represents letters and spaces through temporary clusters of aligned phases. It does not provide secure encryption.
 
 ## Installation
 
@@ -45,16 +40,14 @@ uv run --locked python -m pytest -q
 
 ![Two-shape segmentation comparison](plots/segmentation-2shapes.png)
 
-`src/cv_rnn/cv_rnn_segmentation.py` ports
-`matlab/liboniEA2025image/image_segmentation/run_2layer.m` and
-`spatiotemporal_segmentation.m`: raw two-layer matrix recurrence
-`x ← (K + i·diag(ω))x` (no Euler step, no unit-circle renormalization), a
-strict-majority mean-phase background mask, and inclusive-window phase-only
-clustering. State vectors use MATLAB column-major pixel order.
+`src/cv_rnn/cv_rnn_segmentation.py` implements two upstream MATLAB functions:
 
-Run from the repository root with uv against the bundled
-`datasets/2shapes.mat`, `3shapes.mat`, and `natural_image.mat`;
-no dataset download or MATLAB installation is needed:
+- `matlab/liboniEA2025image/image_segmentation/run_2layer.m`
+- `spatiotemporal_segmentation.m`
+
+The implementation uses the raw recurrence `x ← (K + i·diag(ω))x` in two layers. It uses neither an Euler step nor normalization to the unit circle. A strict-majority rule based on mean phase identifies the background. Clustering uses only phase information from time windows that include both endpoints. State vectors follow MATLAB's column-major pixel order.
+
+Run these commands from the repository root with uv. The repository includes `datasets/2shapes.mat`, `3shapes.mat`, and `natural_image.mat`. You do not need to download datasets or install MATLAB.
 
 ```bash
 uv run --locked python -m src.cv_rnn segmentation --dataset 2shapes --image-index 0 --n-clusters 2
@@ -62,10 +55,15 @@ uv run --locked python -m src.cv_rnn segmentation --dataset natural --n-clusters
 uv run --locked python -m pytest tests/test_segmentation_math.py tests/test_segmentation_animation.py -q
 ```
 
-`--plot` shows the input, background mask, and cluster map, the animated
-phase dynamics, and the spectral-clustering projection in one window.
-Layer-1 animation uses per-frame scaled viridis (paper Fig. 3A); HSV
-fixed to [-π, π] is layer 2 only. Saved counterparts:
+`--plot` shows these results in one window:
+
+- The input image.
+- The background mask.
+- The cluster map.
+- The animated phase dynamics.
+- The projection for spectral clustering.
+
+The layer-1 animation uses viridis with a separate scale for each frame, as in paper Fig. 3A. Only layer 2 uses HSV with a fixed range of [-π, π]. The following images show saved results.
 
 ![Three-shape segmentation](plots/segmentation-3shapes.png)
 
@@ -87,15 +85,13 @@ cluster_map, rho, V, D, projection = spatiotemporal_segmentation_torch(
 fig, anim = animate_dynamics(states, tuple(image.shape))
 ```
 
-`rho`, `V`, `D`, and `projection` contain only foreground (unmasked) nodes,
-in original pixel order; `cluster_map` is image-shaped with `-1` for
-background. `tests/test_segmentation_math.py` checks the recurrence,
-masking, and eigensystem against independent NumPy/SciPy equations, not
-production helpers. `tests/test_image_segmentation.py` checks Python against
-the upstream MATLAB functions executed by GNU Octave, using exported
-`datasets/{2shapes,3shapes,natural}_ref.mat` fixtures.
+`rho`, `V`, `D`, and `projection` contain only foreground nodes in their original pixel order. The mask excludes background nodes. `cluster_map` has the image shape and uses `-1` for background pixels.
 
-To regenerate all three fixtures (Docker required):
+`tests/test_segmentation_math.py` checks the recurrence, masking, and eigensystem against independent NumPy/SciPy equations. It does not use production helpers as references.
+
+`tests/test_image_segmentation.py` compares Python results with upstream MATLAB functions that GNU Octave executes. The test uses exported reference data, called fixtures, in `datasets/{2shapes,3shapes,natural}_ref.mat`.
+
+Run these commands to regenerate all three fixtures. You need Docker for this step.
 
 ```bash
 git submodule update --init --recursive
@@ -105,85 +101,84 @@ docker run --rm -v "$PWD:/work" \
 uv run --locked python -m pytest tests/test_image_segmentation.py -q
 ```
 
-The Dockerfile includes `octave-statistics` for upstream `pdist2`/`kmeans`.
-Without an override, `$SCRIPT` defaults to `/matlab/hello_world.m`. The bind
-mount makes reference outputs persist in the host repository. Export runs
-without figures; the three examples took about three minutes on the development
-machine. Octave 6.4 needs the small `matlab/octave_compat/rng.m` adapter for
-upstream `rng(seed)` calls; it seeds Octave's supported random-state APIs.
+#### Reference fixtures
 
-Fixtures use explicit MATLAB binary format (`save('-v7', ...)`), not Octave's
-default text format. They contain the real image, actual complex initial state,
-parameters, full complex128 trajectory, background mask, final correlation
-matrix, and cluster labels. Runtime version and upstream source text are
-embedded for provenance. Tests share arrays, not seeds.
+The Dockerfile includes `octave-statistics` for the upstream `pdist2` and `kmeans` functions. `$SCRIPT` defaults to `/matlab/hello_world.m` unless you specify another path. The bind mount stores exported files in the host repository.
 
-All three references match Python trajectories and correlations at
-`rtol=1e-10, atol=1e-12`, with exact masks. After identical eigenvector-phase
-canonicalization, the real projections agree (`rtol=1e-9, atol=1e-11`).
-sklearn `KMeans(n_init=1, random_state=0)` on both projections then yields
-the same partition (ARI=1.0). That last check is same-algorithm consistency
-on arrays that already agree to ~4e-12, not clustering-parity with Octave's
-`kmeans`. The `3shapes` fixture is a poorly separable case under Octave's
-exported `x0`: Python vs ground truth ARI 0.496, Octave `kmeans` vs ground
-truth 0.077, and the two clusterers disagree with each other (ARI ~0.40).
-Do not read that fixture as a segmentation-quality result. Demo seed 9 on
-the bundled Python path still scores ARI 1.0 — a different initial state.
-This verifies GNU Octave 6.4 execution of the MATLAB source, not proprietary
-MATLAB.
+The exporter does not create figures. The three examples took about three minutes on the development machine. Octave 6.4 needs `matlab/octave_compat/rng.m` for upstream `rng(seed)` calls. This adapter seeds Octave's supported APIs for random states.
 
-`run_segmentation_example`'s bundled results use the demo's own hardcoded
-seeds (1 for 2shapes, 9 for 3shapes) and hit foreground ARI = 1.0 on every
-bundled shape image (`tests/test_segmentation_objects.py`). Generic random seeds do
-not reproduce this: a 20-seed sweep gives mean foreground ARI ≈ 0.6 (min near
-0) on the same images. Bypassing production's eigenvector canonicalization
-does not close that gap — seed sensitivity is a clustering-quality property
-of these images under random initializations, distinct from the
-backend-independent canonicalization used for cross-runtime *projection*
-parity. See
-[`docs/references/04_paper_vs_matlab_drift.md`](docs/references/04_paper_vs_matlab_drift.md)
-and `scripts/probe_paper_vs_matlab_drift.py` for the full measurement and
-other preprint/published/MATLAB drift this repository found and quantified.
+The fixtures use MATLAB binary format through `save('-v7', ...)`, not Octave's default text format. Each fixture contains:
 
-`scripts/plot_segmentation_eigenmodes.py` renders Figure-6-style diagnostics
-of the layer-2 recurrence matrix `B = K + i*diag(omega)` for both bundled
-2shapes images: eigenvalue magnitude/phase spectra, the six leading
-eigenvector phase maps, modal weight decay, and a full-vs-6-mode
-reconstruction of the raw trajectory. It is a comparable diagnostic, not an
-exact reproduction: upstream ships no Fig. 5/6 driver, and the bundled
-images carry only two discrete frequencies, giving piecewise-real
-eigenvectors (`Arg` ∈ {0, π}) instead of the paper's continuous phase
-gradients. `--synthetic` instead builds a clearly-labeled per-object
-frequency gradient (not bundled data) so the same analysis produces
-traveling-wave modes comparable to Fig. 6B.
+- The input image.
+- The complex initial state.
+- The numerical parameters.
+- The full complex128 trajectory.
+- The background mask.
+- The final correlation matrix.
+- The cluster labels.
+- The runtime version and upstream source text, which record how the exporter produced the fixture.
+
+Tests share actual arrays across runtimes. They do not assume that equal seeds produce equal arrays.
+
+#### Numerical agreement and segmentation quality
+
+All three references match Python trajectories and correlations at `rtol=1e-10, atol=1e-12`. The masks match exactly. Both implementations apply the same rule to standardize each eigenvector's global phase (phase canonicalization). The resulting real projections agree at `rtol=1e-9, atol=1e-11`.
+
+Adjusted Rand Index (ARI) compares partitions without requiring identical label numbers. ARI=1.0 means the partitions agree. Applying sklearn `KMeans(n_init=1, random_state=0)` to both projections gives ARI=1.0. This check uses the same algorithm on arrays that already agree to about 4e-12. It does not establish agreement with Octave's `kmeans` algorithm.
+
+The `3shapes` fixture does not separate the objects clearly under the exported Octave initial state, `x0`. The measured ARIs are:
+
+- Python against ground truth: 0.496.
+- Octave `kmeans` against ground truth: 0.077.
+- Python against Octave `kmeans`: about 0.40.
+
+Do not use this fixture as evidence of segmentation quality. The bundled Python demo with seed 9 still gives ARI=1.0, but it uses a different initial state. The references check GNU Octave 6.4 execution of MATLAB source. They do not check execution in proprietary MATLAB.
+
+`run_segmentation_example` uses the demo seeds: 1 for `2shapes` and 9 for `3shapes`. Every bundled shape image gives foreground ARI=1.0 with these seeds. `tests/test_segmentation_objects.py` checks these results.
+
+Other seeds do not reproduce these results consistently. A sweep across 20 random seeds gives mean foreground ARI of about 0.6 on the same images. The minimum is near 0. Bypassing phase canonicalization does not remove this difference. The initial state affects clustering quality even when projections agree across runtimes.
+
+See [`docs/references/04_paper_vs_matlab_drift.md`](docs/references/04_paper_vs_matlab_drift.md) and `scripts/probe_paper_vs_matlab_drift.py` for the measurements. These files also describe measured differences between the preprint, published paper, and MATLAB code.
+
+#### Eigenmode plots
+
+`scripts/plot_segmentation_eigenmodes.py` examines the layer-2 recurrence matrix `B = K + i*diag(omega)` for both bundled `2shapes` images. The plots follow the style of Figure 6 and show:
+
+- Eigenvalue magnitudes and phases.
+- Phase maps for the six leading eigenvectors.
+- The decrease in modal weights.
+- Reconstructions of the raw trajectory using all modes and only six modes.
+
+These plots provide comparable diagnostics, not an exact reproduction. The upstream code has no driver for Figs. 5/6. The bundled images contain only two discrete frequencies. Their eigenvectors are piecewise real, with `Arg` ∈ {0, π}, rather than the paper's continuous phase gradients.
+
+`--synthetic` creates a frequency gradient within each object. This clearly labeled synthetic input differs from the bundled data. The same analysis then produces traveling-wave modes comparable to Fig. 6B.
 
 ```bash
 uv run --locked python scripts/plot_segmentation_eigenmodes.py
 uv run --locked python scripts/plot_segmentation_eigenmodes.py --synthetic
 ```
 
-`natural_image.mat`'s `lb` key is also real, ARI-comparable ground truth: a
-16-region semantic map (sky/ground/bear/etc, region IDs arbitrary — same
-permutation-invariance `2shapes`/`3shapes` already rely on) with no `0`
-background sentinel, unlike `labels`. `SegmentationExample.scores()`
-reports a single whole-image `ari` for `natural` instead of
-`foreground_ari`/`foreground_mask_iou`/`background_pixel_accuracy`,
-since there is no principled foreground/background split to compute those
-against.
+#### Natural-image scores
+
+The `lb` key in `natural_image.mat` contains ground truth for ARI comparisons. It maps 16 regions, such as sky, ground, and bear. Region IDs are arbitrary, as they are in `2shapes` and `3shapes`. Unlike the shape datasets' `labels`, this map does not use `0` to identify background.
+
+`SegmentationExample.scores()` returns one whole-image `ari` for `natural`. It does not return `foreground_ari`, `foreground_mask_iou`, or `background_pixel_accuracy` for this dataset. The region map provides no defined foreground/background split for these scores.
 
 ### XOR Computation
 
-The Python implementation follows `matlab/budzinskiEAexact/cvnn_xor_gate.m`:
-201 nodes, coupling strength 50, phase lag 1.56, natural frequency 10 Hz, and
-target time 3 seconds. Both inputs target MATLAB nodes 51:150 (Python slice
-`50:150`), at phases -1.5 and +1.5 with independent, nonuniform amplitudes.
-Initial states are calculated by inverse evolution; simultaneous inputs are
-added, not multiplied. One synchrony threshold decodes the result without
-applying Boolean XOR in Python.
+The Python implementation follows `matlab/budzinskiEAexact/cvnn_xor_gate.m` with these parameters:
+
+- 201 nodes.
+- Coupling strength 50.
+- Phase lag 1.56.
+- Natural frequency 10 Hz.
+- Target time 3 seconds.
+
+Both inputs target MATLAB nodes 51:150, or Python slice `50:150`. Their target phases are -1.5 and +1.5, with independent, nonuniform amplitudes. The implementation calculates initial states through inverse evolution. It adds simultaneous inputs rather than multiplying them. One synchrony threshold decodes the result without applying Boolean XOR in Python.
 
 ![xor_plot](plots/ring_network_xor.png)
 
-Run from the repository root with uv; no MATLAB installation is needed:
+Run these commands from the repository root with uv. You do not need MATLAB.
 
 ```bash
 uv run --locked python -m src.cv_rnn xor
@@ -191,8 +186,7 @@ uv run --locked python -m src.cv_rnn xor --plot
 uv run --locked python -m pytest tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
-The first command prints the truth table without opening plots. `--plot`
-displays all four trajectories and their final phase snapshots.
+The first command prints the truth table without opening plots. `--plot` shows all four trajectories and their final phases.
 
 ```python
 from src.cv_rnn import XorCVNN
@@ -203,25 +197,29 @@ inputs = gate.xor_inputs(target_time=3.0, seed=1)
 trajectory = gate.evolve(inputs[(1, 0)], [0.0, 1.0, 2.0, 3.0])  # (nodes, times)
 ```
 
-Propagation uses double-precision FFTs equivalent to the reference's analytical
-Fourier eigensystem. `design_input(target, target_time)` supports comparisons
-using externally supplied complex targets; preserve their amplitudes.
-The default synchrony threshold is 0.8, a decoder choice rather than a value
-specified by the MATLAB plotting script. Other seeds or network sizes are not
-guaranteed to separate at that threshold.
+Propagation uses double-precision fast Fourier transforms (FFTs). These transforms are equivalent to the reference's analytical Fourier eigensystem. `design_input(target, target_time)` accepts external complex targets for comparisons. Preserve the amplitudes of these targets.
 
-Tests compare full complex states with an independent SciPy matrix exponential,
-check inverse-designed targets and additive interference, and exercise the
-actual decoder. This is not yet a MATLAB/Octave cross-runtime verification:
-equal PyTorch and MATLAB seeds do not generate equal samples. Use shared target
-and initial-state arrays for that comparison.
+The default synchrony threshold is 0.8. This threshold is a decoder choice, not a value from the MATLAB plotting script. Other seeds or network sizes might not separate at this threshold.
+
+Tests check:
+
+- Full complex states against an independent SciPy matrix exponential.
+- Targets calculated through inverse evolution.
+- Interference between added inputs.
+- The actual decoder.
+
+These tests do not compare execution across Python and MATLAB/Octave. Equal PyTorch and MATLAB seeds do not generate equal samples. Use shared target arrays and initial-state arrays for such a comparison.
 
 ### Memory Task
 
-`src/cv_rnn/cv_nn_memory.py` ports
-`matlab/budzinskiEAexact/cvnn_memory_task.m`: 321 nodes, coupling strength 45,
-phase lag 1.55, and natural frequency 10 Hz. It shares the double-precision
-Fourier solver in `src/cv_rnn/cv_nn.py` with XOR.
+`src/cv_rnn/cv_nn_memory.py` implements the task from `matlab/budzinskiEAexact/cvnn_memory_task.m` with these parameters:
+
+- 321 nodes.
+- Coupling strength 45.
+- Phase lag 1.55.
+- Natural frequency 10 Hz.
+
+Memory and XOR share the double-precision Fourier solver in `src/cv_rnn/cv_nn.py`.
 
 ![memory_plot](plots/ring_network_memory.png)
 
@@ -231,9 +229,7 @@ uv run --locked python -m src.cv_rnn memory --plot
 uv run --locked python -m pytest tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
-The demos use the package entry point (`uv run --locked python -m src.cv_rnn`), rather than
-executing individual source files. `--seed` selects a reproducible PyTorch run;
-the default is 1. No MATLAB installation is needed.
+Run the demos through `uv run --locked python -m src.cv_rnn`, not through individual source files. `--seed` selects a reproducible PyTorch run and defaults to 1. You do not need MATLAB.
 
 The reference sequence is:
 
@@ -244,14 +240,11 @@ The reference sequence is:
 | 4–7 s | Inverse-designed input for item 6 |
 | 7–8 s | Independent random background, clearing the memory |
 
-Both targets have phase zero in the selected 40-node block, random outside
-phases, and amplitudes in `[2, 2.5)`. Items are numbered 1–8. Node 321 remains
-part of the network but is outside the eight equal-sized decoder groups.
+Both targets use phase zero in the selected 40-node block and random phases outside the block. Their amplitudes are in `[2, 2.5)`. Item numbers range from 1 to 8. Node 321 belongs to the network but lies outside the eight equal-sized decoder groups.
 
-**Boundary semantics matter:** the MATLAB loops overwrite the shared sample at
-1, 4, and 7 seconds with the new segment's initial state. The Python timeline
-does the same. The exact recall states immediately before the updates at 4 and
-7 seconds are therefore returned separately, not substituted into the timeline.
+**The state changes at each segment boundary.** The MATLAB loops replace the shared sample at 1, 4, and 7 seconds. Each replacement uses the next segment's initial state. The Python timeline does the same.
+
+The exact recall states occur immediately before the updates at 4 and 7 seconds. Python returns these states separately. It does not substitute them into the timeline.
 
 ```python
 from src.cv_rnn import MemoryCVNN
@@ -264,20 +257,20 @@ result.recall_states    # complex (321, 2), independent of overwritten samples
 memory.decode(result.recall_states)  # boolean (8, 2): item 2, then item 6
 ```
 
-The default time step is 1 ms; alternate `dt` values must divide one second.
-The decoder thresholds each group's phase synchrony independently at 0.8;
-it does not force an item to win. This decoder and the additional synchrony
-plot follow the paper; the MATLAB script itself only plots phase dynamics.
-Tests cover independent matrix-exponential agreement, cue-boundary overwrites,
-recall and clearing, and exclusion of the unassigned node from decoding.
-MATLAB/Octave cross-runtime verification still requires shared numerical inputs.
+The default time step is 1 ms. Other `dt` values must divide one second exactly. The decoder checks each group's phase synchrony independently against a threshold of 0.8. It does not force one item to win.
+
+The decoder and the additional synchrony plot follow the paper. The MATLAB script only plots phase dynamics. Tests check:
+
+- Agreement with an independent matrix exponential.
+- Sample replacement at cue boundaries.
+- Recall and memory clearing.
+- Exclusion of the unassigned node from decoding.
+
+A comparison across Python and MATLAB/Octave still requires shared numerical inputs.
 
 ### Message Transmission Demo
 
-`src/cv_rnn/cv_nn_message.py` implements an **additive, framed research protocol**.
-It is inspired by the paper, not an exact reproduction of Figure 4: the local
-input description is ambiguous about addition versus multiplication, and the
-original alphabet in Supplementary Note 8 is not available locally.
+`src/cv_rnn/cv_nn_message.py` implements an experimental protocol that adds inputs and assigns each character a time frame. The protocol follows ideas from the paper, but it does not reproduce Figure 4 exactly. The local input description does not clearly specify addition or multiplication. The original alphabet from Supplementary Note 8 is not available locally.
 
 ![message_decoding](plots/ring_network_messaging_decoding.png)
 
@@ -289,25 +282,24 @@ uv run --locked python -m src.cv_rnn message --receiver-seed 99
 uv run --locked python -m pytest tests/test_message_cv_nn.py tests/test_memory_cv_nn.py tests/test_xor_cv_nn.py tests/test_local_synchrony.py -q
 ```
 
-Input must be nonempty uppercase `A-Z` and spaces. Leading/trailing spaces and
-repeated letters are preserved; unsupported characters are rejected, not silently
-normalized. `--seed` defaults to 1 and controls reproducible sender experiments.
-`--frequency-hz` defaults to 10; receiver overrides intentionally allow mismatched
-frequency or initial-state experiments. `--dt` sets receiver sampling, default
-0.01 seconds. Commands use the uv-managed project environment.
+The input must contain at least one character and use only uppercase `A-Z` and spaces. The demo preserves leading spaces, trailing spaces, and repeated letters. It rejects unsupported characters instead of silently changing them.
 
-The public alphabet uses 27 contiguous blocks of 16 nodes (432 total), with
-coupling strength 45 and phase lag 1.55. Each character gets a three-second
-frame. Its complex target has phase zero in the selected block, random phases
-outside, and independent amplitudes in `[2, 2.5)`. The sender privately chooses
-a target delay between 35% and 50% of the frame duration.
+The command options are:
 
-For each input at time `t`, the sender calculates
-`impulse = D(-delay) @ target - state_before_input`.
-The receiver **adds** that pulse to its own running state; it never receives a
-replacement state or target. `Ciphertext` contains only ordered `InputEvent`
-vectors/times and the final observation time. The alphabet and network
-configuration are public; frequency and initial state belong to `MessageKey`.
+- `--seed` controls reproducible sender experiments and defaults to 1.
+- `--frequency-hz` sets the sender frequency and defaults to 10.
+- Receiver overrides permit experiments with a different frequency or initial state.
+- `--dt` sets the receiver's sampling interval and defaults to 0.01 seconds.
+
+The commands use the project environment that uv manages.
+
+The public alphabet uses 27 contiguous blocks of 16 nodes, for 432 nodes in total. The coupling strength is 45, and the phase lag is 1.55. Each character occupies a three-second frame.
+
+Each complex target has phase zero in the selected block and random phases outside that block. The target has independent amplitudes in `[2, 2.5)`. The sender privately chooses a target delay between 35% and 50% of the frame duration.
+
+For each input at time `t`, the sender calculates `impulse = D(-delay) @ target - state_before_input`. The receiver adds this pulse to its current state. The receiver never receives a replacement state or a target.
+
+`Ciphertext` contains only ordered `InputEvent` vectors, their times, and the final observation time. The alphabet and network configuration are public. `MessageKey` contains the frequency and initial state.
 
 ```python
 from src.cv_rnn import MessageDemo
@@ -322,86 +314,88 @@ decoded = receiver.decode_frames(trace)
 text = "".join("?" if item.symbol is None else item.symbol for item in decoded)
 ```
 
-The decoder searches each half-open input frame without seeing private target
-times. It selects the strongest local-coherence peak and compares other blocks
-**at that same instant**. Default acceptance requires synchrony at least 0.9 and
-a margin of at least 0.15. Rejected frames return `symbol=None` (displayed as `?`);
-a space is a separate alphabet symbol. Exactly one result per frame avoids
-duplicate threshold-crossing detections without deleting genuine repeated letters.
-Plots show the receiver's full phase dynamics, symbol-coherence heatmap, public
-frame boundaries, and observed peaks—not sender target annotations.
+The decoder searches each input frame without access to private target times. Each frame includes its start time but excludes its end time. The decoder selects the strongest local-coherence peak, which measures phase alignment within a block. It compares the other blocks **at that same instant**.
 
-**Do not use this for confidentiality or authentication.** A 9 Hz receiver with
-the same initial state decodes the default 10 Hz sender's `HELLO`: common phase
-rotation aliases at the three-second input spacing. A different initial state
-is not guaranteed to hide every character either; the default `--receiver-seed 99`
-experiment currently returns `H????`. The CLI reports these outcomes rather than
-forcing wrong-key failure. Seeds here are reproducibility controls, not
-cryptographic randomness.
+The default decoder accepts a frame only when synchrony is at least 0.9 and the margin is at least 0.15. It returns `symbol=None` for a rejected frame, which the output shows as `?`. A space is a separate alphabet symbol, not a rejected frame.
+
+The decoder returns exactly one result per frame. This rule avoids duplicate detections from repeated threshold crossings without deleting genuine repeated letters. The plots show:
+
+- The receiver's full phase dynamics.
+- A heatmap of symbol coherence.
+- Public frame boundaries.
+- Observed peaks, not the sender's target annotations.
+
+**Do not use this demo for confidentiality or authentication.** A 9 Hz receiver with the same initial state decodes `HELLO` from the default 10 Hz sender. The common phase rotation aliases at the three-second input spacing. A different initial state does not guarantee that every character remains hidden. The default experiment with `--receiver-seed 99` currently returns `H????`.
+
+The CLI reports these results instead of forcing a wrong-key failure. Seeds make experiments reproducible. They do not provide cryptographic randomness.
 
 ![erasure_plot](plots/ring_network_messaging_erasure.png)
 
-This is an in-memory transmission simulation, not a network transport or secure
-file format. Public framing exposes message length. Each default character uses
-6912 bytes of complex pulse data, excluding timing/metadata. Coarse sampling can
-miss peaks; long transmissions and adverse parameters can amplify roundoff and
-state errors. No seed retries, normalization, or automatic corrections conceal
-failures. Tests cover independent impulse dynamics, private-delay target recovery,
-separate receivers, repeated peaks/letters, spaces versus erasures, and the
-frequency-alias counterexample.
+The demo simulates transmission in memory. It does not provide network transport or a secure file format. Public frames reveal message length. Each default character uses 6912 bytes of complex pulse data, excluding timing and metadata.
+
+Coarse sampling can miss peaks. Long transmissions and adverse parameters can amplify roundoff and state errors. The implementation does not conceal failures through seed retries, normalization, or automatic corrections.
+
+Tests check:
+
+- Impulse dynamics against an independent reference.
+- Target recovery with private delays.
+- Separate receivers.
+- Repeated peaks and letters.
+- Spaces versus rejected frames.
+- The frequency-alias counterexample.
 
 ## Key Concepts
 
 ### Complex-Valued Neural Networks
 
-The cv-RNN uses nodes with complex-valued states, where:
-- The amplitude encodes intensity information
-- The phase encodes object identity
-- Linear dynamics in the complex domain produce rich spatiotemporal patterns
+Each cv-RNN node has a complex-valued state:
+
+- The amplitude represents intensity information.
+- The phase represents object identity.
+- Linear dynamics produce patterns that change across nodes and over time.
 
 ### Two-Layer Architecture for Image Segmentation
 
-1. **Layer 1**: Separates foreground objects from background
-2. **Layer 2**: Segments individual objects using unique traveling waves
+1. Layer 1 separates foreground objects from the background.
+2. Layer 2 separates individual objects through distinct traveling waves.
 
 ### Exact Mathematical Framework
 
-The network dynamics are governed by the differential equation:
+The continuous-time network follows this differential equation:
 
 ```
 ẋ(t) = (iωI + ϵe^(-iϕ)A)x(t)
 ```
 
-where:
-- x(t) is the complex-valued state vector
-- ω is the intrinsic frequency
-- ϵ is the coupling strength
-- ϕ is the phase-lag parameter
-- A is the connectivity matrix
+The symbols are:
+
+- x(t): the complex-valued state vector.
+- ω: the intrinsic frequency.
+- ϵ: the coupling strength.
+- ϕ: the phase-lag parameter.
+- A: the connectivity matrix.
 
 ## Comparison with Traditional Methods
 
-The cv-RNN approach offers several advantages:
+The cv-RNN approach uses fixed weights without training. Closed-form expressions give exact solutions for the dynamics. Patterns across nodes and time support different tasks. The approach offers a biologically plausible mechanism for computation.
 
-- No training required - uses fixed weights
-- Mathematically exact solutions with closed-form expressions
-- Rich spatiotemporal dynamics for versatile applications
-- Biologically plausible computational mechanism
+Liboni et al. report these segmentation results in the 2025 paper's *SI Appendix*, section III:
 
-Reported accuracy for image segmentation (Liboni et al. 2025, *SI Appendix* section III;
-see `docs/references/02_supplementary.md`): **93%** of pixels correctly clustered across
-1,000 nonoverlapping two-shape images, and **86%** across 1,000 nonoverlapping three-shape
-images. This is fraction of correctly clustered pixels, not Adjusted Rand Index, and the
-paper reports no comparison against K-means, watershed, or U-Net baselines on this task;
-an earlier version of this table fabricated such a comparison and has been removed. This
-repository's own `foreground_ari`/`background_pixel_accuracy` (2shapes/3shapes)
-and whole-image `ari` (natural; see Image Segmentation above) are per-image
-metrics on the three bundled examples, not a reproduction of the paper's
-1,000-image benchmark, which is not bundled here.
+- 93% of pixels correctly clustered across 1,000 nonoverlapping two-shape images.
+- 86% of pixels correctly clustered across 1,000 nonoverlapping three-shape images.
+
+See `docs/references/02_supplementary.md` for the source. These values measure the fraction of correctly clustered pixels, not ARI. The paper reports no comparison against K-means, watershed, or U-Net on this task. An earlier README table fabricated such a comparison. This README no longer includes that table.
+
+This repository reports per-image scores for the three bundled examples:
+
+- `foreground_ari` and `background_pixel_accuracy` for `2shapes` and `3shapes`.
+- Whole-image `ari` for `natural`, as described in Image Segmentation.
+
+These scores do not reproduce the paper's 1,000-image benchmark. The repository does not include that benchmark.
 
 ## Citations
 
-If you use this code in your research, please cite the original papers:
+If you use this code in research, cite the original papers:
 
 ```bibtex
 @article{liboni2025image,
@@ -429,8 +423,8 @@ If you use this code in your research, please cite the original papers:
 
 ## Acknowledgments
 
-This implementation is based on the groundbreaking work by researchers at Western University, University of Amsterdam, and other institutions. We acknowledge their contributions and encourage users to explore their original papers for the full mathematical details and theoretical insights.
+This implementation follows work by researchers at Western University, the University of Amsterdam, and other institutions. We acknowledge their contributions. Read the original papers for the mathematical details and theory.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project uses the MIT License. See the LICENSE file for details.
